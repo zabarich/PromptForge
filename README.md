@@ -6,6 +6,22 @@ Transform natural language prompts into structured XML format using a hybrid MCP
 
 PromptForge is an MCP server that helps convert ambiguous natural language prompts into well-structured XML format. It reduces ambiguity, anchors attention, and improves reliability across LLM interactions by enforcing a consistent prompt structure.
 
+## Connecting to Claude Desktop
+
+### Using Static OAuth Credentials
+
+PromptForge supports static OAuth credentials for easy connection to Claude Desktop:
+
+1. **Open Claude Desktop settings**
+2. **Add a custom MCP server**
+3. **Enter the following details:**
+   - **Server URL:** `https://promptforge-w36c.onrender.com`
+   - **OAuth Client ID:** `promptforge-static-client`
+   - **OAuth Client Secret:** `promptforge-static-secret-2025`
+4. **Click Connect**
+
+Claude will authenticate using the OAuth 2.1 authorization code flow with PKCE. Once connected, you'll have access to the `promptforge_transform` tool.
+
 ## How It Works
 
 PromptForge uses a hybrid MCP approach:
