@@ -187,6 +187,19 @@ app.post('/api/mcp/transform', (req, res) => {
   }
 });
 
+// Add catch-all route to log any unhandled requests
+app.use('*', (req, res) => {
+  console.log(`[Unhandled Request] ${req.method} ${req.originalUrl}`);
+  console.log(`[Headers]`, JSON.stringify(req.headers, null, 2));
+  console.log(`[Body]`, JSON.stringify(req.body, null, 2));
+  
+  res.status(404).json({
+    error: 'Not Found',
+    message: `Cannot ${req.method} ${req.originalUrl}`,
+    hint: 'MCP endpoint is at /mcp'
+  });
+});
+
 const PORT = process.env.PORT || 3006;
 app.listen(PORT, () => {
   console.log(`PromptForge MCP server running on port ${PORT}`);
