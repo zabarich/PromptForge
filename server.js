@@ -37,15 +37,94 @@ const PROMPTFORGE_TOOL = {
 };
 
 /**
- * Main MCP endpoint that handles all JSON-RPC methods
- * POST /mcp
+ * OAuth2 Dynamic Client Registration endpoint
+ * Required by Claude Chat for authentication
  */
-app.post('/mcp', (req, res) => {
+app.post('/register', (req, res) => {
+  console.log('[OAuth Register] Client registration request');
+  
+  // Return a mock client registration response
+  res.json({
+    client_id: 'promptforge-client-' + Date.now(),
+    client_secret: 'mock-secret-' + Math.random().toString(36),
+    grant_types: req.body.grant_types || ['authorization_code', 'refresh_token'],
+    response_types: req.body.response_types || ['code'],
+    token_endpoint_auth_method: 'client_secret_post',
+    scope: req.body.scope || 'claudeai',
+    redirect_uris: req.body.redirect_uris || ['https://claude.ai/api/mcp/auth_callback']
+  });
+});
+
+/**
+ * Main MCP endpoint at root path for Claude Chat
+ * POST / - handles JSON-RPC methods
+ * GET / - handles SSE connections
+ */
+app.post('/', (req, res) => {
   try {
     const { method, params, id } = req.body;
     
     // Log incoming requests for debugging
-    console.error(`[MCP Request] Method: ${method}, ID: ${id}`);
+    console.log(`[MCP Request] Method: ${method}, ID: ${id}`);
+    
+    // Handle MCP methods
+    handleMCPRequest(req, res);
+  } catch (error) {
+    console.error('MCP endpoint error:', error);
+    return res.json({
+      jsonrpc: '2.0',
+      id: req.body?.id || null,
+      error: {
+        code: -32603,
+        message: 'Internal error',
+        data: { details: error.message }
+      }
+    });
+  }
+});
+
+// SSE endpoint for streaming
+app.get('/', (req, res) => {
+  console.log('[SSE Connection] Client connected for streaming');
+  
+  // Set SSE headers
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*'
+  });
+  
+  // Send initial connection message
+  res.write('data: {"type":"connection","status":"connected"}\n\n');
+  
+  // Keep connection alive
+  const keepAlive = setInterval(() => {
+    res.write(':keep-alive\n\n');
+  }, 30000);
+  
+  // Clean up on disconnect
+  req.on('close', () => {
+    clearInterval(keepAlive);
+    console.log('[SSE Connection] Client disconnected');
+  });
+});
+
+/**
+ * Main MCP endpoint that handles all JSON-RPC methods
+ * Also available at /mcp for backward compatibility
+ */
+app.post('/mcp', (req, res) => {
+  handleMCPRequest(req, res);
+});
+
+// Extracted MCP request handler
+function handleMCPRequest(req, res) {
+  try {
+    const { method, params, id } = req.body;
+    
+    // Log incoming requests for debugging
+    console.log(`[MCP Request] Method: ${method}, ID: ${id}`);
     
     switch (method) {
       case 'initialize':
