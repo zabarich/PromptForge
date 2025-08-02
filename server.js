@@ -235,7 +235,7 @@ function handleMCPRequest(req, res) {
       }
     });
   }
-});
+}
 
 // Keep the old endpoint for backward compatibility
 app.post('/api/mcp/transform', (req, res) => {
