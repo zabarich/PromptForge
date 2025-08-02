@@ -99,9 +99,52 @@ The transformation instructions are stored in `promptforge-instructions.xml`. To
 
 ## API Reference
 
-### POST /api/mcp/transform
+### MCP Protocol Endpoint
 
-Transforms a natural language prompt into structured XML format instructions.
+#### POST /mcp
+
+The main MCP endpoint that handles all JSON-RPC methods following the Model Context Protocol.
+
+**Available Methods:**
+
+1. **initialize** - Initialize MCP connection
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "method": "initialize",
+     "id": 1
+   }
+   ```
+
+2. **tools/list** - List available tools
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "method": "tools/list",
+     "id": 2
+   }
+   ```
+
+3. **tools/call** - Execute the PromptForge transformation
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "method": "tools/call",
+     "params": {
+       "name": "promptforge_transform",
+       "arguments": {
+         "prompt": "your natural language prompt here"
+       }
+     },
+     "id": 3
+   }
+   ```
+
+### Legacy Endpoint (for backward compatibility)
+
+#### POST /api/mcp/transform
+
+The original endpoint is maintained for backward compatibility.
 
 **Request Body:**
 ```json
@@ -110,20 +153,6 @@ Transforms a natural language prompt into structured XML format instructions.
   "method": "transform",
   "params": {
     "prompt": "your natural language prompt here"
-  },
-  "id": 1
-}
-```
-
-**Response:**
-```json
-{
-  "jsonrpc": "2.0",
-  "result": {
-    "action": "execute_transformation",
-    "system_prompt": "[transformation instructions]",
-    "user_prompt": "[original prompt]",
-    "directive": "[execution directive]"
   },
   "id": 1
 }
