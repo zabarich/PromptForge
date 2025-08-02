@@ -1,0 +1,12 @@
+{
+  "name": "promptforge-mcp-server",
+  "version": "1.0.0",
+  "description": "PromptForge MCP Server - Transform natural language into structured XML",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}
