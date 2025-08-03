@@ -239,51 +239,52 @@ app.post('/', validateAuth0Token, (req, res) => {
 
 // SSE endpoint for streaming
 app.get('/', async (req, res) => {
-  console.log('[SSE Connection] Client connected for streaming');
-  
-  // Optional auth check for SSE - don't fail if no token
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.substring(7);
-    try {
-      const decoded = jwt.decode(token, { complete: true });
-      if (decoded && decoded.header && decoded.header.kid) {
-        const key = await jwksClient.getSigningKey(decoded.header.kid);
-        const signingKey = key.getPublicKey();
-        const verified = jwt.verify(token, signingKey, {
-          audience: AUTH0_AUDIENCE,
-          issuer: `https://${AUTH0_DOMAIN}/`,
-          algorithms: ['RS256']
-        });
-        console.log('[SSE Connection] Authenticated user:', verified.sub);
+  try {
+    console.log('[SSE Connection] Client connected for streaming');
+    
+    // Optional auth check for SSE - don't fail if no token
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.substring(7);
+      try {
+        const decoded = jwt.decode(token, { complete: true });
+        if (decoded && decoded.header && decoded.header.kid) {
+          const key = await jwksClient.getSigningKey(decoded.header.kid);
+          const signingKey = key.getPublicKey();
+          const verified = jwt.verify(token, signingKey, {
+            audience: AUTH0_AUDIENCE,
+            issuer: `https://${AUTH0_DOMAIN}/`,
+            algorithms: ['RS256']
+          });
+          console.log('[SSE Connection] Authenticated user:', verified.sub);
+        }
+      } catch (error) {
+        console.log('[SSE Connection] Auth check failed (continuing anyway):', error.message);
       }
-    } catch (error) {
-      console.log('[SSE Connection] Auth check failed (continuing anyway):', error.message);
     }
-  }
-  
-  // Set SSE headers - MUST be done after any auth checks
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-    'Access-Control-Allow-Origin': '*'
-  });
-  
-  // Send initial connection message
-  res.write('data: {"type":"connection","status":"connected"}\n\n');
-  
-  // Keep connection alive
-  const keepAlive = setInterval(() => {
-    res.write(':keep-alive\n\n');
-  }, 30000);
-  
-  // Clean up on disconnect
-  req.on('close', () => {
-    clearInterval(keepAlive);
-    console.log('[SSE Connection] Client disconnected');
-  });
-  
+    
+    // Set SSE headers - MUST be done after any auth checks
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*'
+    });
+    
+    // Send initial connection message
+    res.write('data: {"type":"connection","status":"connected"}\n\n');
+    
+    // Keep connection alive
+    const keepAlive = setInterval(() => {
+      res.write(':keep-alive\n\n');
+    }, 30000);
+    
+    // Clean up on disconnect
+    req.on('close', () => {
+      clearInterval(keepAlive);
+      console.log('[SSE Connection] Client disconnected');
+    });
+    
   } catch (error) {
     console.error('[SSE Connection] Error:', error);
     // If headers haven't been sent, send error response
