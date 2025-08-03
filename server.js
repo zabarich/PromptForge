@@ -120,7 +120,7 @@ app.get('/.well-known/oauth-authorization-server', (req, res) => {
   
   res.json({
     issuer: `https://${AUTH0_DOMAIN}/`,
-    authorization_endpoint: `https://${AUTH0_DOMAIN}/authorize`,
+    authorization_endpoint: `${baseUrl}/authorize`,  // Now points to our authorization page
     token_endpoint: `https://${AUTH0_DOMAIN}/oauth/token`,
     registration_endpoint: `${baseUrl}/register`,
     jwks_uri: `https://${AUTH0_DOMAIN}/.well-known/jwks.json`,
@@ -522,6 +522,31 @@ app.post('/api/mcp/transform', validateAuth0Token, (req, res) => {
       system_prompt: PROMPTFORGE_INSTRUCTIONS,
       user_prompt: prompt,
       directive: 'Transform the user_prompt using the system_prompt instructions and return the result in structured XML format.'
+    });
+  }
+});
+
+/**
+ * OAuth Authorization Endpoint
+ * GET /authorize
+ * 
+ * This endpoint shows the authorization page where users can
+ * authorize Claude Desktop to access PromptForge
+ */
+app.get('/authorize', (req, res) => {
+  try {
+    console.log('[AUTHORIZE] Request received:', {
+      query: req.query,
+      headers: req.headers
+    });
+    
+    // Serve the authorization page
+    res.sendFile(path.join(__dirname, 'authorize.html'));
+  } catch (error) {
+    console.error('[AUTHORIZE] Error:', error);
+    res.status(500).json({
+      error: 'server_error',
+      error_description: 'Failed to load authorization page'
     });
   }
 });
