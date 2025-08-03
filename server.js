@@ -146,12 +146,61 @@ app.get('/.well-known/oauth-protected-resource', (req, res) => {
 });
 
 /**
+ * Debug endpoint to check runtime environment variables
+ * REMOVE IN PRODUCTION!
+ */
+app.get('/debug/env', (req, res) => {
+  res.json({
+    timestamp: new Date().toISOString(),
+    processId: process.pid,
+    nodeVersion: process.version,
+    auth0Domain: process.env.AUTH0_DOMAIN,
+    clientIdLength: process.env.CLAUDE_CLIENT_ID?.length || 0,
+    clientIdFirst4: process.env.CLAUDE_CLIENT_ID?.substring(0, 4) || 'NOT_SET',
+    clientIdLast4: process.env.CLAUDE_CLIENT_ID?.slice(-4) || 'NOT_SET',
+    hasClientSecret: !!process.env.CLAUDE_CLIENT_SECRET,
+    renderServiceName: process.env.RENDER_SERVICE_NAME,
+    renderServiceId: process.env.RENDER_SERVICE_ID,
+    defaultsUsed: {
+      auth0Domain: AUTH0_DOMAIN === 'dev-xzj81p1mmm7ek4m5.uk.auth0.com',
+      clientId: !process.env.CLAUDE_CLIENT_ID,
+      clientSecret: !process.env.CLAUDE_CLIENT_SECRET
+    }
+  });
+});
+
+/**
+ * OAuth flow test endpoint
+ */
+app.get('/test/oauth-flow', async (req, res) => {
+  const authUrl = `https://${process.env.AUTH0_DOMAIN || AUTH0_DOMAIN}/authorize?` + 
+    new URLSearchParams({
+      response_type: 'code',
+      client_id: process.env.CLAUDE_CLIENT_ID || 'NOT_SET',
+      redirect_uri: 'https://claude.ai/api/mcp/auth_callback',
+      scope: 'openid profile email offline_access',
+      state: 'test-state-' + Date.now()
+    });
+  
+  res.json({
+    message: 'This is the OAuth URL that should be used',
+    authUrl,
+    clientIdUsed: (process.env.CLAUDE_CLIENT_ID || 'NOT_SET').substring(0, 4) + '...',
+    auth0Domain: process.env.AUTH0_DOMAIN || AUTH0_DOMAIN
+  });
+});
+
+/**
  * Dynamic Client Registration endpoint
  * Creates OAuth clients dynamically for Claude Desktop
  */
 app.post('/register', async (req, res) => {
   try {
-    console.log('[DCR] Registration request received:', JSON.stringify(req.body, null, 2));
+    console.log('[REGISTER] Incoming request:', {
+      timestamp: new Date().toISOString(),
+      headers: req.headers,
+      body: req.body
+    });
     
     const {
       client_name,
@@ -160,6 +209,21 @@ app.post('/register', async (req, res) => {
       response_types = ['code'],
       token_endpoint_auth_method = 'client_secret_post'
     } = req.body;
+    
+    // Log environment variable status
+    const actualClientId = process.env.CLAUDE_CLIENT_ID;
+    const actualClientSecret = process.env.CLAUDE_CLIENT_SECRET;
+    
+    console.log('[REGISTER] Environment check:', {
+      envClientIdExists: !!actualClientId,
+      envClientIdFirst4: actualClientId?.substring(0, 4) || 'NONE',
+      envClientIdLast4: actualClientId?.slice(-4) || 'NONE',
+      envClientIdLength: actualClientId?.length || 0,
+      hasEnvSecret: !!actualClientSecret,
+      auth0Domain: process.env.AUTH0_DOMAIN || AUTH0_DOMAIN,
+      managementClientId: !!AUTH0_MANAGEMENT_CLIENT_ID,
+      managementSecret: !!AUTH0_MANAGEMENT_CLIENT_SECRET
+    });
     
     // Validate required fields
     if (!client_name || !redirect_uris || !Array.isArray(redirect_uris)) {
@@ -172,20 +236,33 @@ app.post('/register', async (req, res) => {
     // If Auth0 Management API credentials are not configured, 
     // return a pre-configured client for Claude Desktop
     if (!AUTH0_MANAGEMENT_CLIENT_ID || !AUTH0_MANAGEMENT_CLIENT_SECRET) {
-      console.log('[DCR] No Management API credentials, returning pre-configured client');
+      console.log('[REGISTER] No Management API credentials, using pre-configured client');
       
-      // Return a pre-configured response that Claude can use
-      // You'll need to create this application in Auth0 dashboard
-      return res.json({
-        client_id: process.env.CLAUDE_CLIENT_ID || 'promptforge-claude-client',
-        client_secret: process.env.CLAUDE_CLIENT_SECRET || 'temporary-secret-replace-me',
+      const responseClientId = actualClientId || 'promptforge-claude-client';
+      const responseClientSecret = actualClientSecret || 'temporary-secret-replace-me';
+      
+      console.log('[REGISTER] Response values:', {
+        usingEnvClientId: !!actualClientId,
+        responseClientIdFirst4: responseClientId.substring(0, 4),
+        responseClientIdLast4: responseClientId.slice(-4),
+        responseClientIdLength: responseClientId.length,
+        hasResponseSecret: !!responseClientSecret
+      });
+      
+      const response = {
+        client_id: responseClientId,
+        client_secret: responseClientSecret,
         client_name: client_name,
         redirect_uris: redirect_uris,
         grant_types: grant_types,
         response_types: response_types,
         token_endpoint_auth_method: token_endpoint_auth_method,
         scope: 'openid profile email mcp:access'
-      });
+      };
+      
+      console.log('[REGISTER] Sending response with client_id:', responseClientId.substring(0, 4) + '...' + responseClientId.slice(-4));
+      
+      return res.json(response);
     }
     
     // TODO: Implement actual Auth0 Management API integration
@@ -451,6 +528,11 @@ app.post('/api/mcp/transform', validateAuth0Token, (req, res) => {
 
 // Add catch-all route to log any unhandled requests
 app.use('*', (req, res) => {
+  // Don't process if response already sent
+  if (res.headersSent) {
+    return;
+  }
+  
   console.log(`[Unhandled Request] ${req.method} ${req.originalUrl}`);
   console.log(`[Headers]`, JSON.stringify(req.headers, null, 2));
   console.log(`[Body]`, JSON.stringify(req.body, null, 2));
