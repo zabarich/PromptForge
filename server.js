@@ -723,7 +723,7 @@ app.get('/authorize', (req, res) => {
     const auth0Url = new URL(`https://${AUTH0_DOMAIN}/authorize`);
     auth0Url.searchParams.set('response_type', 'code');
     auth0Url.searchParams.set('client_id', AUTH0_CLIENT_ID); // Our real Auth0 client ID
-    auth0Url.searchParams.set('redirect_uri', `https://${req.get('host')}/callback`); // Our callback
+    auth0Url.searchParams.set('redirect_uri', `https://promptforge-w36c.onrender.com/callback`); // Our callback
     auth0Url.searchParams.set('scope', scope);
     auth0Url.searchParams.set('state', auth0State); // Our state for Auth0
     
@@ -806,7 +806,7 @@ app.get('/callback', async (req, res) => {
         code: code,
         client_id: AUTH0_CLIENT_ID,
         client_secret: AUTH0_CLIENT_SECRET,
-        redirect_uri: `https://${req.get('host')}/callback`
+        redirect_uri: `https://promptforge-w36c.onrender.com/callback`
       };
       
       // Include code_verifier if PKCE was used
