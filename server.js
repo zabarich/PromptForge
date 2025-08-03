@@ -727,11 +727,8 @@ app.get('/authorize', (req, res) => {
     auth0Url.searchParams.set('scope', scope);
     auth0Url.searchParams.set('state', auth0State); // Our state for Auth0
     
-    // Include PKCE if provided
-    if (code_challenge) {
-      auth0Url.searchParams.set('code_challenge', code_challenge);
-      auth0Url.searchParams.set('code_challenge_method', code_challenge_method);
-    }
+    // Don't include PKCE for Auth0 - we'll validate it when Claude exchanges the code
+    // This is because we don't have the code_verifier that Claude generated
     
     console.log('[AUTHORIZE-BRIDGE] Redirecting to Auth0 with our credentials');
     console.log('[AUTHORIZE-BRIDGE] Auth0 URL:', auth0Url.toString());
@@ -809,12 +806,7 @@ app.get('/callback', async (req, res) => {
         redirect_uri: `https://promptforge-w36c.onrender.com/callback`
       };
       
-      // Include code_verifier if PKCE was used
-      if (sessionData.codeChallenge) {
-        // For the OAuth bridge, we pass through the PKCE challenge
-        // Auth0 will validate it when Claude exchanges the code
-        console.log('[CALLBACK-BRIDGE] PKCE challenge present, will be validated on token exchange');
-      }
+      // Don't include code_verifier for Auth0 - PKCE will be validated when Claude exchanges the code
       
       console.log('[CALLBACK-BRIDGE] Exchanging Auth0 code for tokens');
       const tokenResponse = await fetch(tokenUrl, {
