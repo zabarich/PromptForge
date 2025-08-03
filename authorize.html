@@ -160,12 +160,12 @@
         // Build Auth0 authorization URL
         function buildAuth0Url() {
             // Get parameters from query string
-            const clientId = urlParams.get('client_id') || '';
+            const clientId = urlParams.get('client_id') || '4nRXsZNVz0umCzwkBHLzwat9ZTzyQ7yh'; // Use actual Auth0 client ID as fallback
             const redirectUri = urlParams.get('redirect_uri') || 'https://claude.ai/api/mcp/auth_callback';
             const state = urlParams.get('state') || '';
             const codeChallenge = urlParams.get('code_challenge');
             const codeChallengeMethod = urlParams.get('code_challenge_method');
-            const scope = urlParams.get('scope') || 'openid profile email mcp:access';
+            const scope = urlParams.get('scope') || 'openid profile email offline_access';
             
             // Build Auth0 URL
             // Note: In production, this should be passed from the server to avoid hardcoding

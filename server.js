@@ -167,7 +167,7 @@ app.get('/.well-known/oauth-authorization-server', (req, res) => {
   
   const metadata = {
     issuer: `https://${AUTH0_DOMAIN}/`,
-    authorization_endpoint: `${baseUrl}/authorize`,
+    authorization_endpoint: `https://${AUTH0_DOMAIN}/authorize`, // Direct to Auth0, not our proxy
     token_endpoint: `https://${AUTH0_DOMAIN}/oauth/token`,
     registration_endpoint: `${baseUrl}/register`,
     jwks_uri: `https://${AUTH0_DOMAIN}/.well-known/jwks.json`,
