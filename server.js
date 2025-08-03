@@ -3,6 +3,8 @@ const fs = require('fs');
 const path = require('path');
 const jwt = require('jsonwebtoken');
 const jwksRsa = require('jwks-rsa');
+const crypto = require('crypto');
+const fetch = require('node-fetch');
 
 const app = express();
 app.use(express.json());
@@ -11,6 +13,39 @@ app.use(express.urlencoded({ extended: true }));
 // Auth0 configuration
 const AUTH0_DOMAIN = process.env.AUTH0_DOMAIN || 'dev-xzj81p1mmm7ek4m5.uk.auth0.com';
 const AUTH0_AUDIENCE = process.env.AUTH0_AUDIENCE || 'https://promptforge-w36c.onrender.com';
+const AUTH0_CLIENT_ID = process.env.CLAUDE_CLIENT_ID || '4nRXsZNVz0umCzwkBHLzwat9ZTzyQ7yh';
+const AUTH0_CLIENT_SECRET = process.env.CLAUDE_CLIENT_SECRET;
+
+// OAuth Bridge Storage - Maps to handle Claude's dynamic client IDs
+const authorizationSessions = new Map(); // Maps state -> session data
+const authorizationCodes = new Map(); // Maps code -> auth data
+const claudeTokens = new Map(); // Maps Claude's client_id -> Auth0 tokens
+
+// Cleanup old entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  
+  // Clean authorization sessions older than 10 minutes
+  for (const [state, session] of authorizationSessions.entries()) {
+    if (now - session.timestamp > 10 * 60 * 1000) {
+      authorizationSessions.delete(state);
+    }
+  }
+  
+  // Clean authorization codes older than 5 minutes
+  for (const [code, data] of authorizationCodes.entries()) {
+    if (now - data.timestamp > 5 * 60 * 1000) {
+      authorizationCodes.delete(code);
+    }
+  }
+  
+  // Clean tokens older than 24 hours
+  for (const [clientId, data] of claudeTokens.entries()) {
+    if (now - data.timestamp > 24 * 60 * 60 * 1000) {
+      claudeTokens.delete(clientId);
+    }
+  }
+}, 5 * 60 * 1000);
 
 // Auth0 Management API configuration for Dynamic Client Registration
 const AUTH0_MANAGEMENT_DOMAIN = process.env.AUTH0_MANAGEMENT_DOMAIN || AUTH0_DOMAIN;
@@ -168,7 +203,7 @@ app.get('/.well-known/oauth-authorization-server', (req, res) => {
   const metadata = {
     issuer: `https://${AUTH0_DOMAIN}/`,
     authorization_endpoint: `${baseUrl}/authorize`, // Use our proxy to ensure correct client_id
-    token_endpoint: `https://${AUTH0_DOMAIN}/oauth/token`,
+    token_endpoint: `${baseUrl}/oauth/token`, // Proxy token exchange too
     // REMOVED registration_endpoint - force Claude to use our client
     jwks_uri: `https://${AUTH0_DOMAIN}/.well-known/jwks.json`,
     response_types_supported: ['code'],
@@ -632,26 +667,231 @@ app.post('/api/mcp/transform', validateAuth0Token, (req, res) => {
 });
 
 /**
- * OAuth Authorization Endpoint
+ * OAuth Authorization Endpoint - OAuth Bridge
  * GET /authorize
  * 
- * This endpoint shows the authorization page where users can
- * authorize Claude Desktop to access PromptForge
+ * This endpoint accepts Claude's dynamic client_id and redirects to Auth0
+ * with our real credentials, maintaining the OAuth state
  */
 app.get('/authorize', (req, res) => {
   try {
-    console.log('[AUTHORIZE] Request received:', {
-      query: req.query,
-      headers: req.headers
-    });
+    console.log('[AUTHORIZE-BRIDGE] ============================================');
+    console.log('[AUTHORIZE-BRIDGE] Request received:', new Date().toISOString());
+    console.log('[AUTHORIZE-BRIDGE] Query params:', req.query);
+    console.log('[AUTHORIZE-BRIDGE] Headers:', req.headers);
     
-    // Serve the authorization page
-    res.sendFile(path.join(__dirname, 'authorize.html'));
+    const {
+      response_type = 'code',
+      client_id, // Claude's dynamic client_id
+      redirect_uri,
+      scope = 'openid profile email offline_access',
+      state,
+      code_challenge,
+      code_challenge_method = 'S256'
+    } = req.query;
+    
+    // Validate required parameters
+    if (!client_id || !redirect_uri || !state) {
+      console.log('[AUTHORIZE-BRIDGE] Missing required parameters');
+      return res.status(400).json({
+        error: 'invalid_request',
+        error_description: 'Missing required parameters: client_id, redirect_uri, or state'
+      });
+    }
+    
+    console.log('[AUTHORIZE-BRIDGE] Claude client_id:', client_id);
+    console.log('[AUTHORIZE-BRIDGE] Redirect URI:', redirect_uri);
+    
+    // Generate a unique state for Auth0
+    const auth0State = crypto.randomBytes(32).toString('hex');
+    
+    // Store session data to bridge Claude's request with Auth0's response
+    const sessionData = {
+      claudeClientId: client_id,
+      claudeRedirectUri: redirect_uri,
+      claudeState: state,
+      codeChallenge: code_challenge,
+      codeChallengeMethod: code_challenge_method,
+      scope: scope,
+      timestamp: Date.now()
+    };
+    
+    authorizationSessions.set(auth0State, sessionData);
+    console.log('[AUTHORIZE-BRIDGE] Stored session with auth0State:', auth0State);
+    
+    // Build Auth0 authorization URL with OUR credentials
+    const auth0Url = new URL(`https://${AUTH0_DOMAIN}/authorize`);
+    auth0Url.searchParams.set('response_type', 'code');
+    auth0Url.searchParams.set('client_id', AUTH0_CLIENT_ID); // Our real Auth0 client ID
+    auth0Url.searchParams.set('redirect_uri', `https://${req.get('host')}/callback`); // Our callback
+    auth0Url.searchParams.set('scope', scope);
+    auth0Url.searchParams.set('state', auth0State); // Our state for Auth0
+    
+    // Include PKCE if provided
+    if (code_challenge) {
+      auth0Url.searchParams.set('code_challenge', code_challenge);
+      auth0Url.searchParams.set('code_challenge_method', code_challenge_method);
+    }
+    
+    console.log('[AUTHORIZE-BRIDGE] Redirecting to Auth0 with our credentials');
+    console.log('[AUTHORIZE-BRIDGE] Auth0 URL:', auth0Url.toString());
+    console.log('[AUTHORIZE-BRIDGE] ============================================');
+    
+    // Redirect to Auth0
+    res.redirect(auth0Url.toString());
   } catch (error) {
-    console.error('[AUTHORIZE] Error:', error);
+    console.error('[AUTHORIZE-BRIDGE] Error:', error);
     res.status(500).json({
       error: 'server_error',
-      error_description: 'Failed to load authorization page'
+      error_description: 'Failed to initiate authorization'
+    });
+  }
+});
+
+/**
+ * OAuth Callback Endpoint - OAuth Bridge
+ * GET /callback
+ * 
+ * Handles the callback from Auth0 and generates a new authorization code for Claude
+ */
+app.get('/callback', async (req, res) => {
+  try {
+    console.log('[CALLBACK-BRIDGE] ============================================');
+    console.log('[CALLBACK-BRIDGE] Auth0 callback received:', new Date().toISOString());
+    console.log('[CALLBACK-BRIDGE] Query params:', req.query);
+    
+    const { code, state, error, error_description } = req.query;
+    
+    // Handle Auth0 errors
+    if (error) {
+      console.error('[CALLBACK-BRIDGE] Auth0 error:', error, error_description);
+      return res.status(400).send(`
+        <html>
+          <body style="font-family: sans-serif; padding: 40px; text-align: center;">
+            <h2>Authentication Failed</h2>
+            <p style="color: #dc3545;">${error}: ${error_description || ''}</p>
+            <a href="#" onclick="window.close()">Close Window</a>
+          </body>
+        </html>
+      `);
+    }
+    
+    // Validate required parameters
+    if (!code || !state) {
+      console.error('[CALLBACK-BRIDGE] Missing code or state');
+      return res.status(400).json({
+        error: 'invalid_request',
+        error_description: 'Missing code or state parameter'
+      });
+    }
+    
+    // Retrieve session data
+    const sessionData = authorizationSessions.get(state);
+    if (!sessionData) {
+      console.error('[CALLBACK-BRIDGE] Invalid or expired state:', state);
+      return res.status(400).json({
+        error: 'invalid_request',
+        error_description: 'Invalid or expired state parameter'
+      });
+    }
+    
+    console.log('[CALLBACK-BRIDGE] Session found for state:', state);
+    console.log('[CALLBACK-BRIDGE] Claude client_id:', sessionData.claudeClientId);
+    
+    // Exchange Auth0 code for tokens
+    try {
+      const tokenUrl = `https://${AUTH0_DOMAIN}/oauth/token`;
+      const tokenParams = {
+        grant_type: 'authorization_code',
+        code: code,
+        client_id: AUTH0_CLIENT_ID,
+        client_secret: AUTH0_CLIENT_SECRET,
+        redirect_uri: `https://${req.get('host')}/callback`
+      };
+      
+      // Include code_verifier if PKCE was used
+      if (sessionData.codeChallenge) {
+        // For the OAuth bridge, we pass through the PKCE challenge
+        // Auth0 will validate it when Claude exchanges the code
+        console.log('[CALLBACK-BRIDGE] PKCE challenge present, will be validated on token exchange');
+      }
+      
+      console.log('[CALLBACK-BRIDGE] Exchanging Auth0 code for tokens');
+      const tokenResponse = await fetch(tokenUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(tokenParams)
+      });
+      
+      const tokenData = await tokenResponse.json();
+      
+      if (!tokenResponse.ok) {
+        console.error('[CALLBACK-BRIDGE] Token exchange failed:', tokenData);
+        throw new Error(tokenData.error_description || 'Token exchange failed');
+      }
+      
+      console.log('[CALLBACK-BRIDGE] Successfully obtained Auth0 tokens');
+      
+      // Generate a new authorization code for Claude
+      const claudeAuthCode = crypto.randomBytes(32).toString('hex');
+      
+      // Store the authorization code with Auth0 tokens
+      const authCodeData = {
+        claudeClientId: sessionData.claudeClientId,
+        claudeRedirectUri: sessionData.claudeRedirectUri,
+        auth0Tokens: {
+          access_token: tokenData.access_token,
+          id_token: tokenData.id_token,
+          refresh_token: tokenData.refresh_token,
+          token_type: tokenData.token_type,
+          expires_in: tokenData.expires_in
+        },
+        codeChallenge: sessionData.codeChallenge,
+        codeChallengeMethod: sessionData.codeChallengeMethod,
+        scope: sessionData.scope,
+        timestamp: Date.now()
+      };
+      
+      authorizationCodes.set(claudeAuthCode, authCodeData);
+      console.log('[CALLBACK-BRIDGE] Generated Claude auth code:', claudeAuthCode);
+      
+      // Clean up the session
+      authorizationSessions.delete(state);
+      
+      // Redirect back to Claude with the new authorization code
+      const claudeRedirectUrl = new URL(sessionData.claudeRedirectUri);
+      claudeRedirectUrl.searchParams.set('code', claudeAuthCode);
+      claudeRedirectUrl.searchParams.set('state', sessionData.claudeState);
+      
+      console.log('[CALLBACK-BRIDGE] Redirecting to Claude:', claudeRedirectUrl.toString());
+      console.log('[CALLBACK-BRIDGE] ============================================');
+      
+      return res.redirect(claudeRedirectUrl.toString());
+      
+    } catch (error) {
+      console.error('[CALLBACK-BRIDGE] Error exchanging code:', error);
+      
+      // Clean up the session
+      authorizationSessions.delete(state);
+      
+      return res.status(500).send(`
+        <html>
+          <body style="font-family: sans-serif; padding: 40px; text-align: center;">
+            <h2>Authentication Error</h2>
+            <p style="color: #dc3545;">Failed to complete authentication. Please try again.</p>
+            <p style="font-size: 14px; color: #666;">${error.message}</p>
+            <a href="#" onclick="window.close()">Close Window</a>
+          </body>
+        </html>
+      `);
+    }
+  } catch (error) {
+    console.error('[CALLBACK-BRIDGE] Unexpected error:', error);
+    return res.status(500).json({
+      error: 'server_error',
+      error_description: 'Internal server error during callback processing'
     });
   }
 });
@@ -723,6 +963,219 @@ app.post('/debug/test-token', async (req, res) => {
   } catch (error) {
     console.error('[TEST-TOKEN] Error:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * OAuth Token Endpoint - OAuth Bridge
+ * POST /oauth/token
+ * 
+ * Exchanges Claude's authorization code for Auth0 tokens
+ */
+app.post('/oauth/token', async (req, res) => {
+  try {
+    console.log('[TOKEN-BRIDGE] ============================================');
+    console.log('[TOKEN-BRIDGE] Token request received:', new Date().toISOString());
+    console.log('[TOKEN-BRIDGE] Body:', {
+      grant_type: req.body.grant_type,
+      client_id: req.body.client_id,
+      redirect_uri: req.body.redirect_uri,
+      has_code: !!req.body.code,
+      has_refresh_token: !!req.body.refresh_token,
+      has_code_verifier: !!req.body.code_verifier
+    });
+    
+    const {
+      grant_type,
+      code,
+      redirect_uri,
+      client_id, // Claude's dynamic client_id
+      code_verifier,
+      refresh_token
+    } = req.body;
+    
+    // Validate grant type
+    if (!grant_type || (grant_type !== 'authorization_code' && grant_type !== 'refresh_token')) {
+      console.error('[TOKEN-BRIDGE] Invalid grant type:', grant_type);
+      return res.status(400).json({
+        error: 'unsupported_grant_type',
+        error_description: 'Only authorization_code and refresh_token grants are supported'
+      });
+    }
+    
+    if (grant_type === 'authorization_code') {
+      // Validate required parameters
+      if (!code || !client_id) {
+        console.error('[TOKEN-BRIDGE] Missing required parameters');
+        return res.status(400).json({
+          error: 'invalid_request',
+          error_description: 'Missing required parameters: code or client_id'
+        });
+      }
+      
+      // Retrieve stored authorization code data
+      const authCodeData = authorizationCodes.get(code);
+      if (!authCodeData) {
+        console.error('[TOKEN-BRIDGE] Invalid or expired authorization code:', code);
+        return res.status(400).json({
+          error: 'invalid_grant',
+          error_description: 'Invalid or expired authorization code'
+        });
+      }
+      
+      // Verify client_id matches
+      if (authCodeData.claudeClientId !== client_id) {
+        console.error('[TOKEN-BRIDGE] Client ID mismatch:', {
+          expected: authCodeData.claudeClientId,
+          received: client_id
+        });
+        return res.status(400).json({
+          error: 'invalid_client',
+          error_description: 'Client ID mismatch'
+        });
+      }
+      
+      // Verify redirect_uri if provided
+      if (redirect_uri && authCodeData.claudeRedirectUri !== redirect_uri) {
+        console.error('[TOKEN-BRIDGE] Redirect URI mismatch');
+        return res.status(400).json({
+          error: 'invalid_grant',
+          error_description: 'Redirect URI mismatch'
+        });
+      }
+      
+      // Validate PKCE if it was used
+      if (authCodeData.codeChallenge) {
+        if (!code_verifier) {
+          console.error('[TOKEN-BRIDGE] Missing code_verifier for PKCE');
+          return res.status(400).json({
+            error: 'invalid_request',
+            error_description: 'Code verifier required for PKCE'
+          });
+        }
+        
+        // Verify code_verifier
+        let isValid = false;
+        if (authCodeData.codeChallengeMethod === 'S256') {
+          const hash = crypto.createHash('sha256').update(code_verifier).digest('base64url');
+          isValid = hash === authCodeData.codeChallenge;
+        } else {
+          isValid = code_verifier === authCodeData.codeChallenge;
+        }
+        
+        if (!isValid) {
+          console.error('[TOKEN-BRIDGE] Invalid code_verifier');
+          return res.status(400).json({
+            error: 'invalid_grant',
+            error_description: 'Invalid code verifier'
+          });
+        }
+        
+        console.log('[TOKEN-BRIDGE] PKCE validation successful');
+      }
+      
+      // Delete the used authorization code
+      authorizationCodes.delete(code);
+      console.log('[TOKEN-BRIDGE] Authorization code consumed');
+      
+      // Store tokens for this client_id
+      const tokenData = {
+        ...authCodeData.auth0Tokens,
+        timestamp: Date.now()
+      };
+      claudeTokens.set(client_id, tokenData);
+      
+      console.log('[TOKEN-BRIDGE] Returning Auth0 tokens to Claude');
+      console.log('[TOKEN-BRIDGE] ============================================');
+      
+      // Return the Auth0 tokens to Claude
+      return res.json({
+        access_token: authCodeData.auth0Tokens.access_token,
+        token_type: authCodeData.auth0Tokens.token_type,
+        expires_in: authCodeData.auth0Tokens.expires_in,
+        refresh_token: authCodeData.auth0Tokens.refresh_token,
+        id_token: authCodeData.auth0Tokens.id_token,
+        scope: authCodeData.scope || 'openid profile email offline_access'
+      });
+      
+    } else if (grant_type === 'refresh_token') {
+      // Handle refresh token grant
+      if (!refresh_token || !client_id) {
+        console.error('[TOKEN-BRIDGE] Missing refresh_token or client_id');
+        return res.status(400).json({
+          error: 'invalid_request',
+          error_description: 'Missing required parameters: refresh_token or client_id'
+        });
+      }
+      
+      // Get stored tokens for this client
+      const storedTokens = claudeTokens.get(client_id);
+      if (!storedTokens || storedTokens.refresh_token !== refresh_token) {
+        console.error('[TOKEN-BRIDGE] Invalid refresh token');
+        return res.status(400).json({
+          error: 'invalid_grant',
+          error_description: 'Invalid refresh token'
+        });
+      }
+      
+      // Exchange refresh token with Auth0
+      try {
+        console.log('[TOKEN-BRIDGE] Refreshing tokens with Auth0');
+        const tokenUrl = `https://${AUTH0_DOMAIN}/oauth/token`;
+        const tokenResponse = await fetch(tokenUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            grant_type: 'refresh_token',
+            refresh_token: storedTokens.refresh_token,
+            client_id: AUTH0_CLIENT_ID,
+            client_secret: AUTH0_CLIENT_SECRET
+          })
+        });
+        
+        const newTokenData = await tokenResponse.json();
+        
+        if (!tokenResponse.ok) {
+          console.error('[TOKEN-BRIDGE] Auth0 refresh failed:', newTokenData);
+          throw new Error(newTokenData.error_description || 'Token refresh failed');
+        }
+        
+        // Update stored tokens
+        const updatedTokenData = {
+          ...newTokenData,
+          timestamp: Date.now()
+        };
+        claudeTokens.set(client_id, updatedTokenData);
+        
+        console.log('[TOKEN-BRIDGE] Tokens refreshed successfully');
+        console.log('[TOKEN-BRIDGE] ============================================');
+        
+        // Return refreshed tokens
+        return res.json({
+          access_token: newTokenData.access_token,
+          token_type: newTokenData.token_type,
+          expires_in: newTokenData.expires_in,
+          refresh_token: newTokenData.refresh_token,
+          id_token: newTokenData.id_token,
+          scope: newTokenData.scope || 'openid profile email offline_access'
+        });
+        
+      } catch (error) {
+        console.error('[TOKEN-BRIDGE] Refresh error:', error);
+        return res.status(500).json({
+          error: 'server_error',
+          error_description: 'Failed to refresh tokens'
+        });
+      }
+    }
+  } catch (error) {
+    console.error('[TOKEN-BRIDGE] Unexpected error:', error);
+    return res.status(500).json({
+      error: 'server_error',
+      error_description: 'Internal server error during token exchange'
+    });
   }
 });
 
