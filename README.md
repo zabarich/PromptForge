@@ -6,21 +6,31 @@ Transform natural language prompts into structured XML format using a hybrid MCP
 
 PromptForge is an MCP server that helps convert ambiguous natural language prompts into well-structured XML format. It reduces ambiguity, anchors attention, and improves reliability across LLM interactions by enforcing a consistent prompt structure.
 
-## Connecting to Claude Desktop
+## Authentication
 
-### Using Static OAuth Credentials
+PromptForge uses Auth0 for secure authentication. All API endpoints require a valid JWT token from Auth0.
 
-PromptForge supports static OAuth credentials for easy connection to Claude Desktop:
+### Connecting to Claude Desktop
+
+To connect PromptForge to Claude Desktop, you'll need OAuth credentials from the Auth0 application:
 
 1. **Open Claude Desktop settings**
 2. **Add a custom MCP server**
 3. **Enter the following details:**
    - **Server URL:** `https://promptforge-w36c.onrender.com`
-   - **OAuth Client ID:** `promptforge-static-client`
-   - **OAuth Client Secret:** `promptforge-static-secret-2025`
+   - **OAuth Client ID:** *(Will be provided after Auth0 setup)*
+   - **OAuth Client Secret:** *(Will be provided after Auth0 setup)*
 4. **Click Connect**
 
-Claude will authenticate using the OAuth 2.1 authorization code flow with PKCE. Once connected, you'll have access to the `promptforge_transform` tool.
+Claude will authenticate using the OAuth 2.1 authorization code flow. Once connected, you'll have access to the `promptforge_transform` tool.
+
+### Auth0 Configuration
+
+The server validates JWT tokens from Auth0 with these settings:
+- **Auth0 Domain:** `promptforge.us.auth0.com`
+- **Auth0 Audience:** `https://promptforge-w36c.onrender.com`
+
+All requests must include a valid Bearer token in the Authorization header.
 
 ## How It Works
 

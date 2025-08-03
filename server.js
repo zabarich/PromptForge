@@ -1,23 +1,24 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
+const jwksRsa = require('jwks-rsa');
+
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Static OAuth credentials
-const STATIC_CLIENT_ID = 'promptforge-static-client';
-const STATIC_CLIENT_SECRET = 'promptforge-static-secret-2025';
+// Auth0 configuration
+const AUTH0_DOMAIN = process.env.AUTH0_DOMAIN || 'promptforge.us.auth0.com';
+const AUTH0_AUDIENCE = process.env.AUTH0_AUDIENCE || 'https://promptforge-w36c.onrender.com';
 
-// In-memory storage for tokens and auth codes (MVP - not for production)
-const authCodes = new Map();
-const accessTokens = new Map();
-
-// Generate random token
-function generateToken() {
-  return crypto.randomBytes(32).toString('hex');
-}
+// Create JWKS client for Auth0
+const jwksClient = jwksRsa({
+  jwksUri: `https://${AUTH0_DOMAIN}/.well-known/jwks.json`,
+  cache: true,
+  rateLimit: true,
+  jwksRequestsPerMinute: 5
+});
 
 // Add CORS middleware for Claude Chat
 app.use((req, res, next) => {
@@ -35,29 +36,47 @@ app.use((req, res, next) => {
 
 const PROMPTFORGE_INSTRUCTIONS = fs.readFileSync('./promptforge-instructions.xml', 'utf-8');
 
-// Bearer token validation middleware
-function validateBearerToken(req, res, next) {
+// JWT validation middleware for Auth0
+async function validateAuth0Token(req, res, next) {
   const authHeader = req.headers.authorization;
   
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({
       error: 'unauthorized',
       error_description: 'Missing or invalid authorization header'
-    }).set('WWW-Authenticate', 'Bearer realm="PromptForge", error="invalid_token"');
+    }).set('WWW-Authenticate', 'Bearer realm="PromptForge"');
   }
   
   const token = authHeader.substring(7);
-  const tokenData = accessTokens.get(token);
   
-  if (!tokenData || tokenData.expires_at < Date.now()) {
+  try {
+    // Decode token to get the key ID
+    const decoded = jwt.decode(token, { complete: true });
+    
+    if (!decoded || !decoded.header || !decoded.header.kid) {
+      throw new Error('Invalid token structure');
+    }
+    
+    // Get the signing key from Auth0
+    const key = await jwksClient.getSigningKey(decoded.header.kid);
+    const signingKey = key.getPublicKey();
+    
+    // Verify the token
+    const verified = jwt.verify(token, signingKey, {
+      audience: AUTH0_AUDIENCE,
+      issuer: `https://${AUTH0_DOMAIN}/`,
+      algorithms: ['RS256']
+    });
+    
+    req.user = verified;
+    next();
+  } catch (error) {
+    console.error('Token validation error:', error.message);
     return res.status(401).json({
       error: 'unauthorized',
       error_description: 'Invalid or expired token'
     }).set('WWW-Authenticate', 'Bearer realm="PromptForge", error="invalid_token"');
   }
-  
-  req.tokenData = tokenData;
-  next();
 }
 
 // Define the PromptForge tool schema for MCP
@@ -77,144 +96,19 @@ const PROMPTFORGE_TOOL = {
 };
 
 /**
- * OAuth2 metadata endpoint - tells Claude where to find OAuth endpoints
+ * OAuth2 metadata endpoint - points to Auth0
  */
 app.get('/.well-known/oauth-authorization-server', (req, res) => {
-  const baseUrl = `https://${req.get('host')}`;
-  
   res.json({
-    issuer: baseUrl,
-    authorization_endpoint: `${baseUrl}/authorize`,
-    token_endpoint: `${baseUrl}/token`,
-    registration_endpoint: `${baseUrl}/register`,
-    response_types_supported: ['code'],
-    grant_types_supported: ['authorization_code'],
+    issuer: `https://${AUTH0_DOMAIN}/`,
+    authorization_endpoint: `https://${AUTH0_DOMAIN}/authorize`,
+    token_endpoint: `https://${AUTH0_DOMAIN}/oauth/token`,
+    jwks_uri: `https://${AUTH0_DOMAIN}/.well-known/jwks.json`,
+    response_types_supported: ['code', 'token', 'id_token'],
+    grant_types_supported: ['authorization_code', 'implicit', 'refresh_token', 'client_credentials'],
     code_challenge_methods_supported: ['S256'],
-    token_endpoint_auth_methods_supported: ['client_secret_post'],
-    scopes_supported: ['mcp:access']
-  });
-});
-
-/**
- * OAuth2 authorization endpoint
- */
-app.get('/authorize', (req, res) => {
-  const { client_id, redirect_uri, response_type, state, code_challenge, code_challenge_method } = req.query;
-  
-  console.log('[OAuth Authorize] Request:', { client_id, redirect_uri, response_type, state });
-  
-  // Validate client_id
-  if (client_id !== STATIC_CLIENT_ID) {
-    return res.status(400).send('Invalid client_id');
-  }
-  
-  // Validate response_type
-  if (response_type !== 'code') {
-    return res.status(400).send('Unsupported response_type');
-  }
-  
-  // Generate authorization code
-  const code = generateToken();
-  authCodes.set(code, {
-    client_id,
-    redirect_uri,
-    code_challenge,
-    code_challenge_method,
-    created_at: Date.now(),
-    expires_at: Date.now() + 600000 // 10 minutes
-  });
-  
-  // Redirect back with code
-  const redirectUrl = new URL(redirect_uri);
-  redirectUrl.searchParams.set('code', code);
-  if (state) {
-    redirectUrl.searchParams.set('state', state);
-  }
-  
-  res.redirect(redirectUrl.toString());
-});
-
-/**
- * OAuth2 token endpoint
- */
-app.post('/token', (req, res) => {
-  const { grant_type, code, client_id, client_secret, code_verifier } = req.body;
-  
-  console.log('[OAuth Token] Request:', { grant_type, client_id, has_code: !!code });
-  
-  // Validate grant type
-  if (grant_type !== 'authorization_code') {
-    return res.status(400).json({
-      error: 'unsupported_grant_type',
-      error_description: 'Only authorization_code grant type is supported'
-    });
-  }
-  
-  // Validate client credentials
-  if (client_id !== STATIC_CLIENT_ID || client_secret !== STATIC_CLIENT_SECRET) {
-    return res.status(401).json({
-      error: 'invalid_client',
-      error_description: 'Invalid client credentials'
-    });
-  }
-  
-  // Validate authorization code
-  const codeData = authCodes.get(code);
-  if (!codeData || codeData.expires_at < Date.now()) {
-    return res.status(400).json({
-      error: 'invalid_grant',
-      error_description: 'Invalid or expired authorization code'
-    });
-  }
-  
-  // Validate PKCE if present
-  if (codeData.code_challenge && codeData.code_challenge_method === 'S256') {
-    const verifier = crypto.createHash('sha256').update(code_verifier).digest('base64url');
-    if (verifier !== codeData.code_challenge) {
-      return res.status(400).json({
-        error: 'invalid_grant',
-        error_description: 'Invalid code verifier'
-      });
-    }
-  }
-  
-  // Remove used authorization code
-  authCodes.delete(code);
-  
-  // Generate access token
-  const accessToken = generateToken();
-  const expiresIn = 1800; // 30 minutes
-  
-  accessTokens.set(accessToken, {
-    client_id,
-    scope: 'mcp:access',
-    created_at: Date.now(),
-    expires_at: Date.now() + (expiresIn * 1000)
-  });
-  
-  res.json({
-    access_token: accessToken,
-    token_type: 'Bearer',
-    expires_in: expiresIn,
-    scope: 'mcp:access'
-  });
-});
-
-/**
- * OAuth2 Dynamic Client Registration endpoint
- * Returns static credentials for PromptForge
- */
-app.post('/register', (req, res) => {
-  console.log('[OAuth Register] Returning static credentials');
-  
-  res.json({
-    client_id: STATIC_CLIENT_ID,
-    client_secret: STATIC_CLIENT_SECRET,
-    grant_types: ['authorization_code'],
-    response_types: ['code'],
-    token_endpoint_auth_method: 'client_secret_post',
-    scope: 'mcp:access',
-    redirect_uris: req.body.redirect_uris || ['https://claude.ai/api/mcp/auth_callback']
+    token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic'],
+    scopes_supported: ['openid', 'profile', 'email', 'mcp:access']
   });
 });
 
@@ -223,12 +117,12 @@ app.post('/register', (req, res) => {
  * POST / - handles JSON-RPC methods
  * GET / - handles SSE connections
  */
-app.post('/', validateBearerToken, (req, res) => {
+app.post('/', validateAuth0Token, (req, res) => {
   try {
     const { method, params, id } = req.body;
     
     // Log incoming requests for debugging
-    console.log(`[MCP Request] Method: ${method}, ID: ${id}`);
+    console.log(`[MCP Request] Method: ${method}, ID: ${id}, User: ${req.user?.sub}`);
     
     // Handle MCP methods
     handleMCPRequest(req, res);
@@ -246,7 +140,7 @@ app.post('/', validateBearerToken, (req, res) => {
   }
 });
 
-// SSE endpoint for streaming
+// SSE endpoint for streaming (no auth required for now)
 app.get('/', (req, res) => {
   console.log('[SSE Connection] Client connected for streaming');
   
@@ -277,7 +171,7 @@ app.get('/', (req, res) => {
  * Main MCP endpoint that handles all JSON-RPC methods
  * Also available at /mcp for backward compatibility
  */
-app.post('/mcp', validateBearerToken, (req, res) => {
+app.post('/mcp', validateAuth0Token, (req, res) => {
   handleMCPRequest(req, res);
 });
 
@@ -401,7 +295,7 @@ function handleMCPRequest(req, res) {
 }
 
 // Keep the old endpoint for backward compatibility
-app.post('/api/mcp/transform', validateBearerToken, (req, res) => {
+app.post('/api/mcp/transform', validateAuth0Token, (req, res) => {
   const prompt = req.body.prompt || (req.body.params && req.body.params.prompt);
   
   if (!prompt) {
@@ -446,4 +340,6 @@ const PORT = process.env.PORT || 3006;
 app.listen(PORT, () => {
   console.log(`PromptForge MCP server running on port ${PORT}`);
   console.log(`MCP endpoint: http://localhost:${PORT}/mcp`);
+  console.log(`Auth0 Domain: ${AUTH0_DOMAIN}`);
+  console.log(`Auth0 Audience: ${AUTH0_AUDIENCE}`);
 });
