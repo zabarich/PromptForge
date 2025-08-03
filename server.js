@@ -39,7 +39,13 @@ app.use((req, res, next) => {
   next();
 });
 
-const PROMPTFORGE_INSTRUCTIONS = fs.readFileSync('./promptforge-instructions.xml', 'utf-8');
+let PROMPTFORGE_INSTRUCTIONS;
+try {
+  PROMPTFORGE_INSTRUCTIONS = fs.readFileSync('./promptforge-instructions.xml', 'utf-8');
+} catch (error) {
+  console.error('Failed to load promptforge-instructions.xml:', error.message);
+  PROMPTFORGE_INSTRUCTIONS = 'Error: Unable to load transformation instructions';
+}
 
 // JWT validation middleware for Auth0
 async function validateAuth0Token(req, res, next) {
@@ -63,8 +69,14 @@ async function validateAuth0Token(req, res, next) {
     }
     
     // Get the signing key from Auth0
-    const key = await jwksClient.getSigningKey(decoded.header.kid);
-    const signingKey = key.getPublicKey();
+    let signingKey;
+    try {
+      const key = await jwksClient.getSigningKey(decoded.header.kid);
+      signingKey = key.getPublicKey();
+    } catch (keyError) {
+      console.error('Failed to get signing key:', keyError.message);
+      throw new Error('Unable to verify token signature');
+    }
     
     // Verify the token
     const verified = jwt.verify(token, signingKey, {
@@ -117,6 +129,19 @@ app.get('/.well-known/oauth-authorization-server', (req, res) => {
     code_challenge_methods_supported: ['S256'],
     token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic'],
     scopes_supported: ['openid', 'profile', 'email', 'mcp:access']
+  });
+});
+
+/**
+ * OAuth2 protected resource metadata endpoint
+ * Tells clients where to find the authorization server
+ */
+app.get('/.well-known/oauth-protected-resource', (req, res) => {
+  const baseUrl = `https://${req.get('host')}`;
+  
+  res.json({
+    resource: baseUrl,
+    oauth_authorization_server: `${baseUrl}/.well-known/oauth-authorization-server`
   });
 });
 
@@ -212,11 +237,32 @@ app.post('/', validateAuth0Token, (req, res) => {
   }
 });
 
-// SSE endpoint for streaming (no auth required for now)
-app.get('/', (req, res) => {
+// SSE endpoint for streaming
+app.get('/', async (req, res) => {
   console.log('[SSE Connection] Client connected for streaming');
   
-  // Set SSE headers
+  // Optional auth check for SSE - don't fail if no token
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.substring(7);
+    try {
+      const decoded = jwt.decode(token, { complete: true });
+      if (decoded && decoded.header && decoded.header.kid) {
+        const key = await jwksClient.getSigningKey(decoded.header.kid);
+        const signingKey = key.getPublicKey();
+        const verified = jwt.verify(token, signingKey, {
+          audience: AUTH0_AUDIENCE,
+          issuer: `https://${AUTH0_DOMAIN}/`,
+          algorithms: ['RS256']
+        });
+        console.log('[SSE Connection] Authenticated user:', verified.sub);
+      }
+    } catch (error) {
+      console.log('[SSE Connection] Auth check failed (continuing anyway):', error.message);
+    }
+  }
+  
+  // Set SSE headers - MUST be done after any auth checks
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
@@ -237,6 +283,14 @@ app.get('/', (req, res) => {
     clearInterval(keepAlive);
     console.log('[SSE Connection] Client disconnected');
   });
+  
+  } catch (error) {
+    console.error('[SSE Connection] Error:', error);
+    // If headers haven't been sent, send error response
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'SSE connection failed' });
+    }
+  }
 });
 
 /**
@@ -408,10 +462,22 @@ app.use('*', (req, res) => {
   });
 });
 
+// Global error handler
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  process.exit(1);
+});
+
 const PORT = process.env.PORT || 3006;
 app.listen(PORT, () => {
   console.log(`PromptForge MCP server running on port ${PORT}`);
   console.log(`MCP endpoint: http://localhost:${PORT}/mcp`);
   console.log(`Auth0 Domain: ${AUTH0_DOMAIN}`);
   console.log(`Auth0 Audience: ${AUTH0_AUDIENCE}`);
+  console.log(`Registration endpoint: http://localhost:${PORT}/register`);
+  console.log(`Instructions loaded: ${PROMPTFORGE_INSTRUCTIONS ? 'Yes' : 'No'}`);
 });
