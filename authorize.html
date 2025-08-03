@@ -160,7 +160,18 @@
         // Build Auth0 authorization URL
         function buildAuth0Url() {
             // Get parameters from query string
-            const clientId = urlParams.get('client_id') || '4nRXsZNVz0umCzwkBHLzwat9ZTzyQ7yh'; // Use actual Auth0 client ID as fallback
+            let clientId = urlParams.get('client_id');
+            
+            // CRITICAL: Always use our configured client ID, not what Claude sends
+            // This ensures we use the client that actually exists in Auth0
+            const configuredClientId = '4nRXsZNVz0umCzwkBHLzwat9ZTzyQ7yh';
+            
+            console.log('[AUTH] Client ID from URL:', clientId);
+            console.log('[AUTH] Using configured client ID:', configuredClientId);
+            
+            // Always use our configured client ID
+            clientId = configuredClientId;
+            
             const redirectUri = urlParams.get('redirect_uri') || 'https://claude.ai/api/mcp/auth_callback';
             const state = urlParams.get('state') || '';
             const codeChallenge = urlParams.get('code_challenge');
@@ -168,7 +179,6 @@
             const scope = urlParams.get('scope') || 'openid profile email offline_access';
             
             // Build Auth0 URL
-            // Note: In production, this should be passed from the server to avoid hardcoding
             const auth0Domain = 'dev-xzj81p1mmm7ek4m5.uk.auth0.com';
             const auth0Url = new URL(`https://${auth0Domain}/authorize`);
             
@@ -187,6 +197,7 @@
                 auth0Url.searchParams.set('code_challenge_method', codeChallengeMethod || 'S256');
             }
             
+            console.log('[AUTH] Final Auth0 URL:', auth0Url.toString());
             return auth0Url.toString();
         }
         
@@ -209,13 +220,15 @@
             }
         });
         
-        // Auto-redirect option (disabled by default to allow user to see the page)
-        const autoRedirect = false;
-        if (autoRedirect && urlParams.has('client_id')) {
+        // Auto-redirect for smoother OAuth flow
+        const autoRedirect = true; // Enable auto-redirect for Claude
+        if (autoRedirect) {
+            console.log('[AUTH] Auto-redirect enabled');
             showLoading();
             setTimeout(() => {
+                console.log('[AUTH] Auto-redirecting to Auth0...');
                 document.getElementById('auth-button').click();
-            }, 1000);
+            }, 500); // Reduced delay for faster flow
         }
     </script>
 </body>
