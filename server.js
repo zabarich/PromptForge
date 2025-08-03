@@ -928,6 +928,17 @@ app.get('/debug/dcr-status', (req, res) => {
   });
 });
 
+// Debug endpoint to verify PKCE fix deployment
+app.get('/debug/pkce-status', (req, res) => {
+  res.json({
+    message: 'PKCE fix status',
+    timestamp: new Date().toISOString(),
+    version: 'v2-no-pkce-to-auth0',
+    deployment: 'd2e4cc6',
+    pkce_handling: 'PKCE parameters NOT sent to Auth0, validated on token exchange'
+  });
+});
+
 // Test token exchange endpoint
 app.post('/debug/test-token', async (req, res) => {
   console.log('[TEST-TOKEN] Testing token exchange');
