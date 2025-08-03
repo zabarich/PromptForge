@@ -9,7 +9,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Auth0 configuration
-const AUTH0_DOMAIN = process.env.AUTH0_DOMAIN || 'promptforge.us.auth0.com';
+const AUTH0_DOMAIN = process.env.AUTH0_DOMAIN || 'dev-xzj81p1mmm7ek4m5.uk.auth0.com';
 const AUTH0_AUDIENCE = process.env.AUTH0_AUDIENCE || 'https://promptforge-w36c.onrender.com';
 
 // Auth0 Management API configuration for Dynamic Client Registration
@@ -209,35 +209,7 @@ app.post('/register', async (req, res) => {
   }
 });
 
-/**
- * Main MCP endpoint at root path for Claude Chat
- * POST / - handles JSON-RPC methods
- * GET / - handles SSE connections
- */
-app.post('/', validateAuth0Token, (req, res) => {
-  try {
-    const { method, params, id } = req.body;
-    
-    // Log incoming requests for debugging
-    console.log(`[MCP Request] Method: ${method}, ID: ${id}, User: ${req.user?.sub}`);
-    
-    // Handle MCP methods
-    handleMCPRequest(req, res);
-  } catch (error) {
-    console.error('MCP endpoint error:', error);
-    return res.json({
-      jsonrpc: '2.0',
-      id: req.body?.id || null,
-      error: {
-        code: -32603,
-        message: 'Internal error',
-        data: { details: error.message }
-      }
-    });
-  }
-});
-
-// SSE endpoint for streaming
+// SSE endpoint for streaming - MUST be defined before POST /
 app.get('/', async (req, res) => {
   try {
     console.log('[SSE Connection] Client connected for streaming');
@@ -291,6 +263,33 @@ app.get('/', async (req, res) => {
     if (!res.headersSent) {
       res.status(500).json({ error: 'SSE connection failed' });
     }
+  }
+});
+
+/**
+ * Main MCP endpoint at root path for Claude Chat
+ * POST / - handles JSON-RPC methods
+ */
+app.post('/', validateAuth0Token, (req, res) => {
+  try {
+    const { method, params, id } = req.body;
+    
+    // Log incoming requests for debugging
+    console.log(`[MCP Request] Method: ${method}, ID: ${id}, User: ${req.user?.sub}`);
+    
+    // Handle MCP methods
+    handleMCPRequest(req, res);
+  } catch (error) {
+    console.error('MCP endpoint error:', error);
+    return res.json({
+      jsonrpc: '2.0',
+      id: req.body?.id || null,
+      error: {
+        code: -32603,
+        message: 'Internal error',
+        data: { details: error.message }
+      }
+    });
   }
 });
 
