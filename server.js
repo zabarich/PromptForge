@@ -27,12 +27,17 @@ const jwksClient = jwksRsa({
 
 // Add CORS middleware for Claude Chat
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
+  // Enhanced CORS logging
+  console.log(`[CORS] ${req.method} ${req.path} from origin:`, req.headers.origin || 'no-origin');
+  
+  res.header('Access-Control-Allow-Origin', 'https://claude.ai');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Allow-Credentials', 'true');
   
   // Handle preflight requests
   if (req.method === 'OPTIONS') {
+    console.log('[CORS] Preflight request from:', req.headers.origin, 'for:', req.path);
     return res.sendStatus(200);
   }
   
@@ -133,20 +138,31 @@ const PROMPTFORGE_TOOL = {
  * OAuth2 metadata endpoint - points to Auth0
  */
 app.get('/.well-known/oauth-authorization-server', (req, res) => {
+  console.log('[OAUTH-METADATA] ============================================');
+  console.log('[OAUTH-METADATA] Request received at:', new Date().toISOString());
+  console.log('[OAUTH-METADATA] Headers:', JSON.stringify(req.headers, null, 2));
+  console.log('[OAUTH-METADATA] User-Agent:', req.headers['user-agent']);
+  console.log('[OAUTH-METADATA] Origin:', req.headers.origin);
+  console.log('[OAUTH-METADATA] Host:', req.get('host'));
+  
   const baseUrl = `https://${req.get('host')}`;
   
-  res.json({
+  const metadata = {
     issuer: `https://${AUTH0_DOMAIN}/`,
-    authorization_endpoint: `${baseUrl}/authorize`,  // Now points to our authorization page
+    authorization_endpoint: `${baseUrl}/authorize`,
     token_endpoint: `https://${AUTH0_DOMAIN}/oauth/token`,
     registration_endpoint: `${baseUrl}/register`,
     jwks_uri: `https://${AUTH0_DOMAIN}/.well-known/jwks.json`,
-    response_types_supported: ['code', 'token', 'id_token'],
-    grant_types_supported: ['authorization_code', 'implicit', 'refresh_token', 'client_credentials'],
-    code_challenge_methods_supported: ['S256'],
+    response_types_supported: ['code'],
+    grant_types_supported: ['authorization_code', 'refresh_token'],
+    code_challenge_methods_supported: ['S256', 'plain'],
     token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic'],
-    scopes_supported: ['openid', 'profile', 'email', 'mcp:access']
-  });
+    scopes_supported: ['openid', 'profile', 'email', 'offline_access']
+  };
+  
+  console.log('[OAUTH-METADATA] Returning:', JSON.stringify(metadata, null, 2));
+  console.log('[OAUTH-METADATA] ============================================');
+  res.json(metadata);
 });
 
 /**
@@ -154,12 +170,18 @@ app.get('/.well-known/oauth-authorization-server', (req, res) => {
  * Tells clients where to find the authorization server
  */
 app.get('/.well-known/oauth-protected-resource', (req, res) => {
+  console.log('[RESOURCE-METADATA] Request received at:', new Date().toISOString());
+  console.log('[RESOURCE-METADATA] User-Agent:', req.headers['user-agent']);
+  
   const baseUrl = `https://${req.get('host')}`;
   
-  res.json({
+  const metadata = {
     resource: baseUrl,
     oauth_authorization_server: `${baseUrl}/.well-known/oauth-authorization-server`
-  });
+  };
+  
+  console.log('[RESOURCE-METADATA] Returning:', JSON.stringify(metadata, null, 2));
+  res.json(metadata);
 });
 
 /**
@@ -213,11 +235,10 @@ app.get('/test/oauth-flow', async (req, res) => {
  */
 app.post('/register', async (req, res) => {
   try {
-    console.log('[REGISTER] Incoming request:', {
-      timestamp: new Date().toISOString(),
-      headers: req.headers,
-      body: req.body
-    });
+    console.log('[REGISTER] ============================================');
+    console.log('[REGISTER] Incoming request at:', new Date().toISOString());
+    console.log('[REGISTER] Headers:', JSON.stringify(req.headers, null, 2));
+    console.log('[REGISTER] Body:', JSON.stringify(req.body, null, 2));
     
     const {
       client_name,
@@ -278,6 +299,8 @@ app.post('/register', async (req, res) => {
       };
       
       console.log('[REGISTER] Sending response with client_id:', responseClientId.substring(0, 4) + '...' + responseClientId.slice(-4));
+      console.log('[REGISTER] Full response:', JSON.stringify(response, null, 2));
+      console.log('[REGISTER] ============================================');
       
       return res.json(response);
     }
@@ -568,22 +591,35 @@ app.get('/authorize', (req, res) => {
   }
 });
 
-// Add catch-all route to log any unhandled requests
-app.use('*', (req, res) => {
-  // Don't process if response already sent
-  if (res.headersSent) {
-    return;
-  }
+// Health check endpoint with detailed status
+app.get('/health', (req, res) => {
+  console.log('[HEALTH] Health check requested at:', new Date().toISOString());
+  console.log('[HEALTH] Request from:', req.headers['user-agent']);
   
-  console.log(`[Unhandled Request] ${req.method} ${req.originalUrl}`);
-  console.log(`[Headers]`, JSON.stringify(req.headers, null, 2));
-  console.log(`[Body]`, JSON.stringify(req.body, null, 2));
+  const response = {
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    auth0_configured: !!process.env.AUTH0_DOMAIN,
+    client_configured: !!process.env.CLAUDE_CLIENT_ID,
+    client_secret_configured: !!process.env.CLAUDE_CLIENT_SECRET,
+    auth0_domain: process.env.AUTH0_DOMAIN || AUTH0_DOMAIN,
+    environment: {
+      node_version: process.version,
+      platform: process.platform,
+      pid: process.pid
+    },
+    endpoints: {
+      oauth_metadata: '/.well-known/oauth-authorization-server',
+      resource_metadata: '/.well-known/oauth-protected-resource',
+      register: '/register',
+      authorize: '/authorize',
+      mcp: '/mcp',
+      sse: '/' 
+    }
+  };
   
-  res.status(404).json({
-    error: 'Not Found',
-    message: `Cannot ${req.method} ${req.originalUrl}`,
-    hint: 'MCP endpoint is at /mcp'
-  });
+  console.log('[HEALTH] Returning:', JSON.stringify(response, null, 2));
+  res.json(response);
 });
 
 // Add debug endpoint to check if DCR was called
@@ -592,6 +628,42 @@ app.get('/debug/dcr-status', (req, res) => {
     message: 'Check server logs for DCR calls',
     timestamp: new Date().toISOString(),
     hint: 'If no [REGISTER] logs appear, Claude is not calling the DCR endpoint'
+  });
+});
+
+// Add request logging middleware
+app.use((req, res, next) => {
+  console.log(`[REQUEST] ${req.method} ${req.path} at ${new Date().toISOString()}`);
+  if (req.method === 'POST' && req.body) {
+    console.log('[REQUEST] Body:', JSON.stringify(req.body, null, 2));
+  }
+  next();
+});
+
+// Add catch-all route to log any unhandled requests
+app.use('*', (req, res) => {
+  // Don't process if response already sent
+  if (res.headersSent) {
+    return;
+  }
+  
+  console.log('[404] ============================================');
+  console.log(`[404] Unhandled Request: ${req.method} ${req.originalUrl}`);
+  console.log(`[404] Headers:`, JSON.stringify(req.headers, null, 2));
+  console.log(`[404] Body:`, JSON.stringify(req.body, null, 2));
+  console.log('[404] ============================================');
+  
+  res.status(404).json({
+    error: 'Not Found',
+    message: `Cannot ${req.method} ${req.originalUrl}`,
+    available_endpoints: [
+      '/.well-known/oauth-authorization-server',
+      '/.well-known/oauth-protected-resource',
+      '/register',
+      '/authorize',
+      '/health',
+      '/mcp'
+    ]
   });
 });
 
