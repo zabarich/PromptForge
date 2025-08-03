@@ -253,10 +253,13 @@ app.get('/test/oauth-flow', async (req, res) => {
  */
 app.post('/register', async (req, res) => {
   try {
+    const timestamp = Date.now();
     console.log('[REGISTER] ============================================');
-    console.log('[REGISTER] Incoming request at:', new Date().toISOString());
-    console.log('[REGISTER] Headers:', JSON.stringify(req.headers, null, 2));
-    console.log('[REGISTER] Body:', JSON.stringify(req.body, null, 2));
+    console.log(`[REGISTER-${timestamp}] CLAUDE IS CALLING REGISTER!`);
+    console.log(`[REGISTER-${timestamp}] Time:`, new Date().toISOString());
+    console.log(`[REGISTER-${timestamp}] Headers:`, JSON.stringify(req.headers, null, 2));
+    console.log(`[REGISTER-${timestamp}] Body:`, JSON.stringify(req.body, null, 2));
+    console.log(`[REGISTER-${timestamp}] Client name from request:`, req.body.client_name);
     
     const {
       client_name,
@@ -676,6 +679,36 @@ app.get('/debug/dcr-status', (req, res) => {
     timestamp: new Date().toISOString(),
     hint: 'If no [REGISTER] logs appear, Claude is not calling the DCR endpoint'
   });
+});
+
+// Test token exchange endpoint
+app.post('/debug/test-token', async (req, res) => {
+  console.log('[TEST-TOKEN] Testing token exchange');
+  const { code, client_id, client_secret } = req.body;
+  
+  try {
+    const tokenUrl = `https://${AUTH0_DOMAIN}/oauth/token`;
+    const params = new URLSearchParams({
+      grant_type: 'authorization_code',
+      code: code || 'test-code',
+      client_id: client_id || process.env.CLAUDE_CLIENT_ID,
+      client_secret: client_secret || process.env.CLAUDE_CLIENT_SECRET,
+      redirect_uri: 'https://claude.ai/api/mcp/auth_callback'
+    });
+    
+    console.log('[TEST-TOKEN] Request to:', tokenUrl);
+    console.log('[TEST-TOKEN] Params:', params.toString());
+    
+    res.json({
+      message: 'Token exchange test',
+      tokenUrl,
+      params: Object.fromEntries(params),
+      note: 'Use this to test if token exchange works with your Auth0 setup'
+    });
+  } catch (error) {
+    console.error('[TEST-TOKEN] Error:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Add global request logging middleware before catch-all
