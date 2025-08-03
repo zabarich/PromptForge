@@ -12,6 +12,11 @@ app.use(express.urlencoded({ extended: true }));
 const AUTH0_DOMAIN = process.env.AUTH0_DOMAIN || 'promptforge.us.auth0.com';
 const AUTH0_AUDIENCE = process.env.AUTH0_AUDIENCE || 'https://promptforge-w36c.onrender.com';
 
+// Auth0 Management API configuration for Dynamic Client Registration
+const AUTH0_MANAGEMENT_DOMAIN = process.env.AUTH0_MANAGEMENT_DOMAIN || AUTH0_DOMAIN;
+const AUTH0_MANAGEMENT_CLIENT_ID = process.env.AUTH0_MANAGEMENT_CLIENT_ID;
+const AUTH0_MANAGEMENT_CLIENT_SECRET = process.env.AUTH0_MANAGEMENT_CLIENT_SECRET;
+
 // Create JWKS client for Auth0
 const jwksClient = jwksRsa({
   jwksUri: `https://${AUTH0_DOMAIN}/.well-known/jwks.json`,
@@ -99,10 +104,13 @@ const PROMPTFORGE_TOOL = {
  * OAuth2 metadata endpoint - points to Auth0
  */
 app.get('/.well-known/oauth-authorization-server', (req, res) => {
+  const baseUrl = `https://${req.get('host')}`;
+  
   res.json({
     issuer: `https://${AUTH0_DOMAIN}/`,
     authorization_endpoint: `https://${AUTH0_DOMAIN}/authorize`,
     token_endpoint: `https://${AUTH0_DOMAIN}/oauth/token`,
+    registration_endpoint: `${baseUrl}/register`,
     jwks_uri: `https://${AUTH0_DOMAIN}/.well-known/jwks.json`,
     response_types_supported: ['code', 'token', 'id_token'],
     grant_types_supported: ['authorization_code', 'implicit', 'refresh_token', 'client_credentials'],
@@ -110,6 +118,70 @@ app.get('/.well-known/oauth-authorization-server', (req, res) => {
     token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic'],
     scopes_supported: ['openid', 'profile', 'email', 'mcp:access']
   });
+});
+
+/**
+ * Dynamic Client Registration endpoint
+ * Creates OAuth clients dynamically for Claude Desktop
+ */
+app.post('/register', async (req, res) => {
+  try {
+    console.log('[DCR] Registration request received:', JSON.stringify(req.body, null, 2));
+    
+    const {
+      client_name,
+      redirect_uris,
+      grant_types = ['authorization_code'],
+      response_types = ['code'],
+      token_endpoint_auth_method = 'client_secret_post'
+    } = req.body;
+    
+    // Validate required fields
+    if (!client_name || !redirect_uris || !Array.isArray(redirect_uris)) {
+      return res.status(400).json({
+        error: 'invalid_request',
+        error_description: 'client_name and redirect_uris are required'
+      });
+    }
+    
+    // If Auth0 Management API credentials are not configured, 
+    // return a pre-configured client for Claude Desktop
+    if (!AUTH0_MANAGEMENT_CLIENT_ID || !AUTH0_MANAGEMENT_CLIENT_SECRET) {
+      console.log('[DCR] No Management API credentials, returning pre-configured client');
+      
+      // Return a pre-configured response that Claude can use
+      // You'll need to create this application in Auth0 dashboard
+      return res.json({
+        client_id: process.env.CLAUDE_CLIENT_ID || 'promptforge-claude-client',
+        client_secret: process.env.CLAUDE_CLIENT_SECRET || 'temporary-secret-replace-me',
+        client_name: client_name,
+        redirect_uris: redirect_uris,
+        grant_types: grant_types,
+        response_types: response_types,
+        token_endpoint_auth_method: token_endpoint_auth_method,
+        scope: 'openid profile email mcp:access'
+      });
+    }
+    
+    // TODO: Implement actual Auth0 Management API integration
+    // This would involve:
+    // 1. Getting Management API access token
+    // 2. Creating application via Management API
+    // 3. Returning the created client details
+    
+    // For now, return an error indicating DCR is not fully implemented
+    return res.status(501).json({
+      error: 'not_implemented',
+      error_description: 'Dynamic client registration with Auth0 Management API is not yet implemented. Please use pre-configured client credentials.'
+    });
+    
+  } catch (error) {
+    console.error('[DCR] Registration error:', error);
+    return res.status(500).json({
+      error: 'server_error',
+      error_description: 'Failed to register client'
+    });
+  }
 });
 
 /**

@@ -12,17 +12,24 @@ PromptForge uses Auth0 for secure authentication. All API endpoints require a va
 
 ### Connecting to Claude Desktop
 
-To connect PromptForge to Claude Desktop, you'll need OAuth credentials from the Auth0 application:
+Claude Desktop uses Dynamic Client Registration (DCR) to connect to MCP servers. PromptForge supports two connection methods:
 
+#### Method 1: Dynamic Registration (Recommended)
+Simply add the server URL in Claude Desktop:
 1. **Open Claude Desktop settings**
 2. **Add a custom MCP server**
-3. **Enter the following details:**
-   - **Server URL:** `https://promptforge-w36c.onrender.com`
-   - **OAuth Client ID:** *(Will be provided after Auth0 setup)*
-   - **OAuth Client Secret:** *(Will be provided after Auth0 setup)*
+3. **Enter the Server URL:** `https://promptforge-w36c.onrender.com`
 4. **Click Connect**
 
-Claude will authenticate using the OAuth 2.1 authorization code flow. Once connected, you'll have access to the `promptforge_transform` tool.
+Claude will automatically register itself and obtain credentials.
+
+#### Method 2: Pre-configured Client (Fallback)
+If dynamic registration fails, you can use pre-configured credentials:
+1. **Server URL:** `https://promptforge-w36c.onrender.com`
+2. **Client ID:** *(Set via CLAUDE_CLIENT_ID environment variable)*
+3. **Client Secret:** *(Set via CLAUDE_CLIENT_SECRET environment variable)*
+
+Once connected, you'll have access to the `promptforge_transform` tool.
 
 ### Auth0 Configuration
 
@@ -106,7 +113,15 @@ Your PromptForge server will be deployed and accessible at:
 
 ### Environment Variables
 
-The server automatically uses the PORT environment variable provided by Render. No additional configuration needed.
+The following environment variables can be configured:
+
+- `PORT` - Server port (automatically set by Render)
+- `AUTH0_DOMAIN` - Auth0 domain (default: promptforge.us.auth0.com)
+- `AUTH0_AUDIENCE` - Auth0 API audience (default: https://promptforge-w36c.onrender.com)
+- `CLAUDE_CLIENT_ID` - Pre-configured OAuth client ID for Claude Desktop
+- `CLAUDE_CLIENT_SECRET` - Pre-configured OAuth client secret for Claude Desktop
+- `AUTH0_MANAGEMENT_CLIENT_ID` - Auth0 Management API client ID (for full DCR support)
+- `AUTH0_MANAGEMENT_CLIENT_SECRET` - Auth0 Management API client secret (for full DCR support)
 
 ## Customizing Instructions
 
