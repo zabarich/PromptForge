@@ -134,8 +134,26 @@ const PROMPTFORGE_TOOL = {
   }
 };
 
+// Add root info endpoint for MCP capabilities
+app.get('/info', (req, res) => {
+  console.log('[INFO] Request received');
+  res.json({
+    name: 'PromptForge MCP Server',
+    version: '1.0.0',
+    authentication: {
+      type: 'oauth2',
+      discovery: '/.well-known/oauth-authorization-server'
+    },
+    capabilities: {
+      tools: true,
+      streaming: true
+    }
+  });
+});
+
 /**
  * OAuth2 metadata endpoint - points to Auth0
+ * MUST be before any auth middleware
  */
 app.get('/.well-known/oauth-authorization-server', (req, res) => {
   console.log('[OAUTH-METADATA] ============================================');
@@ -326,13 +344,42 @@ app.post('/register', async (req, res) => {
   }
 });
 
+// Add HEAD request handler with OAuth hints
+app.head('/', (req, res) => {
+  console.log('[HEAD /] Request from:', req.headers['user-agent']);
+  console.log('[HEAD /] Headers:', JSON.stringify(req.headers, null, 2));
+  
+  res.setHeader('X-MCP-OAuth-Required', 'true');
+  res.setHeader('X-MCP-OAuth-Discovery', '/.well-known/oauth-authorization-server');
+  res.setHeader('Link', '</.well-known/oauth-authorization-server>; rel="oauth-authorization-server"');
+  res.sendStatus(200);
+});
+
 // SSE endpoint for streaming - MUST be defined before POST /
 app.get('/', async (req, res) => {
   try {
-    console.log('[SSE Connection] Client connected for streaming');
+    console.log('[SSE/GET /] Request received');
+    console.log('[SSE/GET /] Headers:', JSON.stringify(req.headers, null, 2));
     
-    // Optional auth check for SSE - don't fail if no token
+    // Check if this is an unauthorized request
     const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      // Send OAuth discovery hint for unauthorized requests
+      console.log('[SSE/GET /] Unauthorized - sending OAuth discovery');
+      res.status(401)
+         .set('WWW-Authenticate', 'Bearer realm="PromptForge"')
+         .json({
+        error: 'unauthorized',
+        error_description: 'Authentication required',
+        oauth_discovery_url: '/.well-known/oauth-authorization-server'
+      });
+      return;
+    }
+    
+    console.log('[SSE Connection] Authorized client connected for streaming');
+    
+    // Validate the token
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const token = authHeader.substring(7);
       try {
@@ -631,9 +678,15 @@ app.get('/debug/dcr-status', (req, res) => {
   });
 });
 
-// Add request logging middleware
+// Add global request logging middleware before catch-all
 app.use((req, res, next) => {
+  // Skip if response already sent
+  if (res.headersSent) {
+    return next();
+  }
+  
   console.log(`[REQUEST] ${req.method} ${req.path} at ${new Date().toISOString()}`);
+  console.log('[REQUEST] Headers:', JSON.stringify(req.headers, null, 2));
   if (req.method === 'POST' && req.body) {
     console.log('[REQUEST] Body:', JSON.stringify(req.body, null, 2));
   }
