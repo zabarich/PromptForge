@@ -169,13 +169,16 @@ app.get('/.well-known/oauth-authorization-server', (req, res) => {
     issuer: `https://${AUTH0_DOMAIN}/`,
     authorization_endpoint: `${baseUrl}/authorize`, // Use our proxy to ensure correct client_id
     token_endpoint: `https://${AUTH0_DOMAIN}/oauth/token`,
-    registration_endpoint: `${baseUrl}/register`,
+    // REMOVED registration_endpoint - force Claude to use our client
     jwks_uri: `https://${AUTH0_DOMAIN}/.well-known/jwks.json`,
     response_types_supported: ['code'],
     grant_types_supported: ['authorization_code', 'refresh_token'],
     code_challenge_methods_supported: ['S256', 'plain'],
     token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic'],
-    scopes_supported: ['openid', 'profile', 'email', 'offline_access']
+    scopes_supported: ['openid', 'profile', 'email', 'offline_access'],
+    // Add client information
+    client_id: process.env.CLAUDE_CLIENT_ID,
+    client_authentication_required: false
   };
   
   console.log('[OAUTH-METADATA] Returning:', JSON.stringify(metadata, null, 2));
@@ -290,6 +293,18 @@ app.post('/register', async (req, res) => {
         error: 'invalid_request',
         error_description: 'client_name and redirect_uris are required'
       });
+    }
+    
+    // Check if Claude is requesting a specific client name/ID
+    const requestedClientName = req.body.client_name || '';
+    console.log(`[REGISTER-${timestamp}] Requested client name:`, requestedClientName);
+    
+    // If Claude is sending its own client ID (like promptforge-client-TIMESTAMP)
+    // we need to handle this differently
+    if (requestedClientName.startsWith('promptforge-client-')) {
+      console.log(`[REGISTER-${timestamp}] Claude is using dynamic client ID:`, requestedClientName);
+      console.log(`[REGISTER-${timestamp}] WARNING: Claude appears to be using its own client ID`);
+      console.log(`[REGISTER-${timestamp}] This client ID must exist in Auth0 or auth will fail`);
     }
     
     // If Auth0 Management API credentials are not configured, 
