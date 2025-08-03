@@ -49,13 +49,25 @@ try {
 
 // JWT validation middleware for Auth0
 async function validateAuth0Token(req, res, next) {
+  // CRITICAL: Don't try to set headers if they're already sent (e.g., for SSE)
+  if (res.headersSent) {
+    console.log('[AUTH] Headers already sent, skipping auth validation');
+    return next();
+  }
+  
   const authHeader = req.headers.authorization;
   
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({
-      error: 'unauthorized',
-      error_description: 'Missing or invalid authorization header'
-    }).set('WWW-Authenticate', 'Bearer realm="PromptForge"');
+    // Only set status and headers if they haven't been sent
+    if (!res.headersSent) {
+      res.status(401);
+      res.set('WWW-Authenticate', 'Bearer realm="PromptForge"');
+      return res.json({
+        error: 'unauthorized',
+        error_description: 'Missing or invalid authorization header'
+      });
+    }
+    return;
   }
   
   const token = authHeader.substring(7);
@@ -89,10 +101,15 @@ async function validateAuth0Token(req, res, next) {
     next();
   } catch (error) {
     console.error('Token validation error:', error.message);
-    return res.status(401).json({
-      error: 'unauthorized',
-      error_description: 'Invalid or expired token'
-    }).set('WWW-Authenticate', 'Bearer realm="PromptForge", error="invalid_token"');
+    // Only send response if headers haven't been sent
+    if (!res.headersSent) {
+      res.status(401);
+      res.set('WWW-Authenticate', 'Bearer realm="PromptForge", error="invalid_token"');
+      return res.json({
+        error: 'unauthorized',
+        error_description: 'Invalid or expired token'
+      });
+    }
   }
 }
 
@@ -566,6 +583,15 @@ app.use('*', (req, res) => {
     error: 'Not Found',
     message: `Cannot ${req.method} ${req.originalUrl}`,
     hint: 'MCP endpoint is at /mcp'
+  });
+});
+
+// Add debug endpoint to check if DCR was called
+app.get('/debug/dcr-status', (req, res) => {
+  res.json({
+    message: 'Check server logs for DCR calls',
+    timestamp: new Date().toISOString(),
+    hint: 'If no [REGISTER] logs appear, Claude is not calling the DCR endpoint'
   });
 });
 

@@ -168,6 +168,7 @@
             const scope = urlParams.get('scope') || 'openid profile email mcp:access';
             
             // Build Auth0 URL
+            // Note: In production, this should be passed from the server to avoid hardcoding
             const auth0Domain = 'dev-xzj81p1mmm7ek4m5.uk.auth0.com';
             const auth0Url = new URL(`https://${auth0Domain}/authorize`);
             
