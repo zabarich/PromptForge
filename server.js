@@ -10,6 +10,142 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// SSE Session Manager for MCP Server
+class SSESessionManager {
+  constructor() {
+    this.connections = new Map(); // connectionId -> response object
+    this.cleanupInterval = setInterval(() => this.cleanup(), 30000); // Clean up every 30s
+  }
+
+  // Add new SSE connection
+  addConnection(connectionId, res) {
+    // Set SSE headers
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'Cache-Control'
+    });
+
+    // Send initial connection confirmation
+    res.write(`data: ${JSON.stringify({
+      type: 'connection',
+      status: 'connected',
+      connectionId
+    })}\n\n`);
+
+    this.connections.set(connectionId, {
+      response: res,
+      lastSeen: Date.now(),
+      connected: true
+    });
+
+    // Handle connection close
+    res.on('close', () => {
+      this.removeConnection(connectionId);
+    });
+
+    res.on('error', (err) => {
+      console.error(`SSE connection error for ${connectionId}:`, err);
+      this.removeConnection(connectionId);
+    });
+
+    console.log(`SSE connection established: ${connectionId}`);
+  }
+
+  // Remove connection
+  removeConnection(connectionId) {
+    const connection = this.connections.get(connectionId);
+    if (connection) {
+      connection.connected = false;
+      if (!connection.response.destroyed) {
+        connection.response.end();
+      }
+      this.connections.delete(connectionId);
+      console.log(`SSE connection removed: ${connectionId}`);
+    }
+  }
+
+  // Send MCP message to specific connection
+  sendMCPMessage(connectionId, mcpResponse) {
+    const connection = this.connections.get(connectionId);
+    if (connection && connection.connected && !connection.response.destroyed) {
+      try {
+        const sseMessage = `data: ${JSON.stringify(mcpResponse)}\n\n`;
+        connection.response.write(sseMessage);
+        connection.lastSeen = Date.now();
+        return true;
+      } catch (error) {
+        console.error(`Error sending SSE message to ${connectionId}:`, error);
+        this.removeConnection(connectionId);
+        return false;
+      }
+    }
+    return false;
+  }
+
+  // Broadcast to all connections
+  broadcast(mcpResponse) {
+    let sentCount = 0;
+    for (const [connectionId, connection] of this.connections) {
+      if (this.sendMCPMessage(connectionId, mcpResponse)) {
+        sentCount++;
+      }
+    }
+    return sentCount;
+  }
+
+  // Clean up stale connections
+  cleanup() {
+    const now = Date.now();
+    const staleThreshold = 5 * 60 * 1000; // 5 minutes
+
+    for (const [connectionId, connection] of this.connections) {
+      if (now - connection.lastSeen > staleThreshold) {
+        console.log(`Cleaning up stale SSE connection: ${connectionId}`);
+        this.removeConnection(connectionId);
+      }
+    }
+  }
+
+  // Get connection count
+  getConnectionCount() {
+    return this.connections.size;
+  }
+}
+
+// MCP Response Handler
+class MCPResponseHandler {
+  constructor() {
+    this.sseManager = new SSESessionManager();
+  }
+
+  // Send dual-channel MCP response
+  sendMCPResponse(req, res, mcpResponse, connectionId = null) {
+    // Always send HTTP response
+    res.json(mcpResponse);
+
+    // Also send via SSE if connectionId provided
+    if (connectionId) {
+      this.sseManager.sendMCPMessage(connectionId, mcpResponse);
+    } else {
+      // Broadcast to all SSE connections if no specific connection
+      this.sseManager.broadcast(mcpResponse);
+    }
+  }
+
+  // Handle SSE endpoint
+  handleSSEConnection(req, res) {
+    const connectionId = req.query.connectionId || `conn_${Date.now()}_${Math.random()}`;
+    this.sseManager.addConnection(connectionId, res);
+    return connectionId;
+  }
+}
+
+// Initialize MCP Response Handler
+const mcpHandler = new MCPResponseHandler();
+
 // Auth0 configuration
 const AUTH0_DOMAIN = process.env.AUTH0_DOMAIN || 'dev-xzj81p1mmm7ek4m5.uk.auth0.com';
 const AUTH0_AUDIENCE = process.env.AUTH0_AUDIENCE || 'https://promptforge-w36c.onrender.com';
@@ -430,6 +566,43 @@ app.post('/register', async (req, res) => {
   }
 });
 
+// Dedicated SSE endpoint for MCP
+app.get('/mcp/sse', async (req, res) => {
+  try {
+    console.log('[MCP SSE] Connection request received');
+    console.log('[MCP SSE] Headers:', JSON.stringify(req.headers, null, 2));
+    
+    // Check if this is an unauthorized request
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      // Send OAuth discovery hint for unauthorized requests
+      console.log('[MCP SSE] Unauthorized - sending OAuth discovery');
+      res.status(401)
+         .set('WWW-Authenticate', 'Bearer realm="PromptForge"')
+         .json({
+        error: 'unauthorized',
+        error_description: 'Authentication required',
+        oauth_discovery_url: '/.well-known/oauth-authorization-server'
+      });
+      return;
+    }
+    
+    console.log('[MCP SSE] Authorized client connected for streaming');
+    
+    // Handle SSE connection with the new manager
+    const connectionId = mcpHandler.handleSSEConnection(req, res);
+    console.log('[MCP SSE] Connection established with ID:', connectionId);
+    
+  } catch (error) {
+    console.error('[MCP SSE] Error:', error);
+    // If headers haven't been sent, send error response
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'SSE connection failed' });
+    }
+  }
+});
+
 // Add HEAD request handler with OAuth hints
 app.head('/', (req, res) => {
   console.log('[HEAD /] Request from:', req.headers['user-agent']);
@@ -465,51 +638,9 @@ app.get('/', async (req, res) => {
     
     console.log('[SSE Connection] Authorized client connected for streaming');
     
-    // Validate the token
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.substring(7);
-      try {
-        const decoded = jwt.decode(token, { complete: true });
-        
-        // Check if this is an encrypted token (JWE)
-        if (decoded && decoded.header && decoded.header.enc) {
-          console.log('[SSE Connection] Authenticated with encrypted token (JWE)');
-        } else if (decoded && decoded.header && decoded.header.kid) {
-          const key = await jwksClient.getSigningKey(decoded.header.kid);
-          const signingKey = key.getPublicKey();
-          const verified = jwt.verify(token, signingKey, {
-            audience: AUTH0_AUDIENCE,
-            issuer: `https://${AUTH0_DOMAIN}/`,
-            algorithms: ['RS256']
-          });
-          console.log('[SSE Connection] Authenticated user:', verified.sub);
-        }
-      } catch (error) {
-        console.log('[SSE Connection] Auth check failed (continuing anyway):', error.message);
-      }
-    }
-    
-    // Set SSE headers - MUST be done after any auth checks
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'Access-Control-Allow-Origin': '*'
-    });
-    
-    // Send initial connection message
-    res.write('data: {"type":"connection","status":"connected"}\n\n');
-    
-    // Keep connection alive
-    const keepAlive = setInterval(() => {
-      res.write(':keep-alive\n\n');
-    }, 30000);
-    
-    // Clean up on disconnect
-    req.on('close', () => {
-      clearInterval(keepAlive);
-      console.log('[SSE Connection] Client disconnected');
-    });
+    // Use the new SSE handler
+    const connectionId = mcpHandler.handleSSEConnection(req, res);
+    console.log('[SSE Connection] Connection established with ID:', connectionId);
     
   } catch (error) {
     console.error('[SSE Connection] Error:', error);
@@ -567,15 +698,18 @@ function handleMCPRequest(req, res) {
   try {
     const { method, params, id } = req.body;
     
+    // Get connection ID from headers or query
+    const connectionId = req.headers['x-connection-id'] || req.query.connectionId;
+    
     // Log incoming requests for debugging
-    console.log(`[MCP Request] Method: ${method}, ID: ${id}`);
+    console.log(`[MCP Request] Method: ${method}, ID: ${id}, ConnectionID: ${connectionId}`);
     
     switch (method) {
       case 'initialize':
         // Initialize the MCP connection
         const clientVersion = params?.protocolVersion || '2024-11-05';
         console.log('[MCP] Initialize with protocol version:', clientVersion);
-        return res.json({
+        const initResponse = {
           jsonrpc: '2.0',
           id,
           result: {
@@ -595,18 +729,22 @@ function handleMCPRequest(req, res) {
               version: '1.0.0'
             }
           }
-        });
+        };
+        // Send via both channels
+        return mcpHandler.sendMCPResponse(req, res, initResponse, connectionId);
 
       case 'tools/list':
         // List available tools
         console.log('[MCP] Tools list requested, returning:', JSON.stringify([PROMPTFORGE_TOOL], null, 2));
-        return res.json({
+        const toolsResponse = {
           jsonrpc: '2.0',
           id,
           result: {
             tools: [PROMPTFORGE_TOOL]
           }
-        });
+        };
+        // Send via both channels
+        return mcpHandler.sendMCPResponse(req, res, toolsResponse, connectionId);
 
       case 'tools/call':
         // Execute tool call
@@ -1309,10 +1447,20 @@ process.on('uncaughtException', (error) => {
   process.exit(1);
 });
 
+// Keep-alive ping for SSE connections
+setInterval(() => {
+  const pingMessage = {
+    type: 'ping',
+    timestamp: Date.now()
+  };
+  mcpHandler.sseManager.broadcast(pingMessage);
+}, 30000); // Every 30 seconds
+
 const PORT = process.env.PORT || 3006;
 app.listen(PORT, () => {
   console.log(`PromptForge MCP server running on port ${PORT}`);
   console.log(`MCP endpoint: http://localhost:${PORT}/mcp`);
+  console.log(`SSE endpoint: http://localhost:${PORT}/mcp/sse`);
   console.log(`Auth0 Domain: ${AUTH0_DOMAIN}`);
   console.log(`Auth0 Audience: ${AUTH0_AUDIENCE}`);
   console.log(`Registration endpoint: http://localhost:${PORT}/register`);
