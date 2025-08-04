@@ -202,22 +202,22 @@ const PROMPTFORGE_TOOL = {
   }
 };
 
-// Add root info endpoint for MCP capabilities
-app.get('/info', (req, res) => {
-  console.log('[INFO] Request received');
-  res.json({
-    name: 'PromptForge MCP Server',
-    version: '1.0.0',
-    authentication: {
-      type: 'oauth2',
-      discovery: '/.well-known/oauth-authorization-server'
-    },
-    capabilities: {
-      tools: true,
-      streaming: true
-    }
-  });
-});
+// REMOVED: /info endpoint - DevPartner AI doesn't have this and it might confuse Claude
+// app.get('/info', (req, res) => {
+//   console.log('[INFO] Request received');
+//   res.json({
+//     name: 'PromptForge MCP Server',
+//     version: '1.0.0',
+//     authentication: {
+//       type: 'oauth2',
+//       discovery: '/.well-known/oauth-authorization-server'
+//     },
+//     capabilities: {
+//       tools: true,
+//       streaming: true
+//     }
+//   });
+// });
 
 /**
  * OAuth2 metadata endpoint - points to Auth0
@@ -237,16 +237,16 @@ app.get('/.well-known/oauth-authorization-server', (req, res) => {
     issuer: `https://${AUTH0_DOMAIN}/`,
     authorization_endpoint: `${baseUrl}/authorize`, // Use our proxy to ensure correct client_id
     token_endpoint: `${baseUrl}/oauth/token`, // Proxy token exchange too
-    // REMOVED registration_endpoint - force Claude to use our client
+    registration_endpoint: `${baseUrl}/register`, // Re-added to match DevPartner
     jwks_uri: `https://${AUTH0_DOMAIN}/.well-known/jwks.json`,
     response_types_supported: ['code'],
     grant_types_supported: ['authorization_code', 'refresh_token'],
     code_challenge_methods_supported: ['S256', 'plain'],
-    token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic'],
-    scopes_supported: ['openid', 'profile', 'email', 'offline_access'],
-    // Add client information
-    client_id: process.env.CLAUDE_CLIENT_ID,
-    client_authentication_required: false
+    token_endpoint_auth_methods_supported: ['none', 'client_secret_post'],
+    registration_endpoint_auth_methods_supported: ['none'],
+    subject_types_supported: ['public'],
+    id_token_signing_alg_values_supported: ['RS256'],
+    scopes_supported: ['mcp:access', 'mcp:write', 'mcp:admin']
   };
   
   console.log('[OAUTH-METADATA] Returning:', JSON.stringify(metadata, null, 2));
@@ -581,7 +581,14 @@ function handleMCPRequest(req, res) {
           result: {
             protocolVersion: clientVersion, // Echo back the client's version
             capabilities: {
-              tools: {}
+              tools: {
+                list: true,
+                call: true
+              },
+              resources: {
+                read: false,
+                list: false
+              }
             },
             serverInfo: {
               name: 'PromptForge',
