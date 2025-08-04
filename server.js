@@ -60,6 +60,12 @@ const jwksClient = jwksRsa({
   jwksRequestsPerMinute: 5
 });
 
+// Log ALL requests first
+app.use((req, res, next) => {
+  console.log(`[ALL-REQUESTS] ${req.method} ${req.path}${req.url.includes('?') ? '?' + req.url.split('?')[1] : ''}`);
+  next();
+});
+
 // Add CORS middleware for Claude Chat
 app.use((req, res, next) => {
   // Enhanced CORS logging
