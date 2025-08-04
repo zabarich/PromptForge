@@ -666,6 +666,30 @@ app.post('/', validateAuth0Token, (req, res) => {
     // Handle MCP methods - check if it's a notification first
     if (method && method.startsWith('notifications/')) {
       console.log(`[MCP] Notification handled at top level: ${method}`);
+      
+      // Special handling for initialized notification
+      if (method === 'notifications/initialized') {
+        console.log('[MCP] Client initialized - sending tools list proactively');
+        
+        // Proactively send the tools list
+        const toolsNotification = {
+          jsonrpc: '2.0',
+          method: 'tools/list',
+          params: {
+            tools: [PROMPTFORGE_TOOL]
+          }
+        };
+        
+        // Get connection ID if available
+        const connectionId = req.headers['x-connection-id'] || req.query.connectionId;
+        if (connectionId) {
+          mcpHandler.sseManager.sendMCPMessage(connectionId, toolsNotification);
+        } else {
+          // Broadcast to all connections
+          mcpHandler.sseManager.broadcast(toolsNotification);
+        }
+      }
+      
       return; // Notifications don't get a response
     }
     
@@ -730,8 +754,8 @@ function handleMCPRequest(req, res) {
             }
           }
         };
-        // Send via both channels
-        return mcpHandler.sendMCPResponse(req, res, initResponse, connectionId);
+        // Send response
+        return res.json(initResponse);
 
       case 'tools/list':
         // List available tools
@@ -743,8 +767,8 @@ function handleMCPRequest(req, res) {
             tools: [PROMPTFORGE_TOOL]
           }
         };
-        // Send via both channels
-        return mcpHandler.sendMCPResponse(req, res, toolsResponse, connectionId);
+        // Send response
+        return res.json(toolsResponse);
 
       case 'tools/call':
         // Execute tool call
@@ -804,10 +828,23 @@ function handleMCPRequest(req, res) {
         });
 
       default:
-        // Handle notifications (no response needed)
+        // Handle notifications
         if (method && method.startsWith('notifications/')) {
           console.log(`[MCP] Notification received: ${method}`);
-          return; // Notifications don't need a response
+          
+          // For notifications/initialized, send a success response
+          if (method === 'notifications/initialized') {
+            console.log('[MCP] Client initialized, sending response');
+            const notificationResponse = {
+              jsonrpc: '2.0',
+              id,
+              result: null // Notifications return null result
+            };
+            return res.json(notificationResponse);
+          }
+          
+          // Other notifications don't need a response
+          return res.status(204).end();
         }
         
         // Method not found
