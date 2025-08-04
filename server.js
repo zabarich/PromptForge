@@ -567,11 +567,13 @@ function handleMCPRequest(req, res) {
     switch (method) {
       case 'initialize':
         // Initialize the MCP connection
+        const clientVersion = params?.protocolVersion || '2024-11-05';
+        console.log('[MCP] Initialize with protocol version:', clientVersion);
         return res.json({
           jsonrpc: '2.0',
           id,
           result: {
-            protocolVersion: '2024-11-05',
+            protocolVersion: clientVersion, // Echo back the client's version
             capabilities: {
               tools: {}
             },
@@ -584,6 +586,7 @@ function handleMCPRequest(req, res) {
 
       case 'tools/list':
         // List available tools
+        console.log('[MCP] Tools list requested, returning:', JSON.stringify([PROMPTFORGE_TOOL], null, 2));
         return res.json({
           jsonrpc: '2.0',
           id,
