@@ -674,6 +674,7 @@ app.post('/api/mcp/transform', validateAuth0Token, (req, res) => {
  * with our real credentials, maintaining the OAuth state
  */
 app.get('/authorize', (req, res) => {
+  console.log('[AUTHORIZE-HIT] Someone hit /authorize endpoint!');
   try {
     console.log('[AUTHORIZE-BRIDGE] ============================================');
     console.log('[AUTHORIZE-BRIDGE] Request received:', new Date().toISOString());
@@ -917,6 +918,12 @@ app.get('/health', (req, res) => {
   
   console.log('[HEALTH] Returning:', JSON.stringify(response, null, 2));
   res.json(response);
+});
+
+// Debug route to catch any Auth0-like paths
+app.get('/oauth/authorize', (req, res) => {
+  console.log('[OAUTH-CATCH] Someone hit /oauth/authorize!');
+  res.redirect(`/authorize?${new URLSearchParams(req.query).toString()}`);
 });
 
 // Add debug endpoint to check if DCR was called
