@@ -712,6 +712,10 @@ app.get('/authorize', (req, res) => {
     // Generate a unique state for Auth0
     const auth0State = crypto.randomBytes(32).toString('hex');
     
+    // Generate our own PKCE pair for Auth0 (separate from Claude's)
+    const auth0CodeVerifier = crypto.randomBytes(32).toString('base64url');
+    const auth0CodeChallenge = crypto.createHash('sha256').update(auth0CodeVerifier).digest('base64url');
+    
     // Store session data to bridge Claude's request with Auth0's response
     const sessionData = {
       claudeClientId: client_id,
@@ -720,6 +724,8 @@ app.get('/authorize', (req, res) => {
       codeChallenge: code_challenge,
       codeChallengeMethod: code_challenge_method,
       scope: scope,
+      // Store our Auth0 PKCE verifier
+      auth0CodeVerifier: auth0CodeVerifier,
       timestamp: Date.now()
     };
     
@@ -734,8 +740,9 @@ app.get('/authorize', (req, res) => {
     auth0Url.searchParams.set('scope', scope);
     auth0Url.searchParams.set('state', auth0State); // Our state for Auth0
     
-    // Don't include PKCE for Auth0 - we'll validate it when Claude exchanges the code
-    // This is because we don't have the code_verifier that Claude generated
+    // Include our own PKCE parameters for Auth0
+    auth0Url.searchParams.set('code_challenge', auth0CodeChallenge);
+    auth0Url.searchParams.set('code_challenge_method', 'S256');
     
     console.log('[AUTHORIZE-BRIDGE] Redirecting to Auth0 with our credentials');
     console.log('[AUTHORIZE-BRIDGE] Auth0 URL:', auth0Url.toString());
@@ -810,10 +817,10 @@ app.get('/callback', async (req, res) => {
         code: code,
         client_id: AUTH0_CLIENT_ID,
         client_secret: AUTH0_CLIENT_SECRET,
-        redirect_uri: `https://promptforge-w36c.onrender.com/callback`
+        redirect_uri: `https://promptforge-w36c.onrender.com/callback`,
+        // Include the code_verifier we generated for Auth0
+        code_verifier: sessionData.auth0CodeVerifier
       };
-      
-      // Don't include code_verifier for Auth0 - PKCE will be validated when Claude exchanges the code
       
       console.log('[CALLBACK-BRIDGE] Exchanging Auth0 code for tokens');
       const tokenResponse = await fetch(tokenUrl, {
