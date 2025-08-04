@@ -532,6 +532,12 @@ app.post('/', validateAuth0Token, (req, res) => {
     console.log(`[MCP Request] Method: ${method}, ID: ${id}, User: ${req.user?.sub}`);
     console.log(`[MCP Request] Full body:`, JSON.stringify(req.body, null, 2));
     
+    // Handle MCP methods - check if it's a notification first
+    if (method && method.startsWith('notifications/')) {
+      console.log(`[MCP] Notification handled at top level: ${method}`);
+      return; // Notifications don't get a response
+    }
+    
     // Handle MCP methods
     handleMCPRequest(req, res);
   } catch (error) {
@@ -653,7 +659,14 @@ function handleMCPRequest(req, res) {
         });
 
       default:
+        // Handle notifications (no response needed)
+        if (method && method.startsWith('notifications/')) {
+          console.log(`[MCP] Notification received: ${method}`);
+          return; // Notifications don't need a response
+        }
+        
         // Method not found
+        console.log(`[MCP] Unknown method requested: ${method}`);
         return res.json({
           jsonrpc: '2.0',
           id,
