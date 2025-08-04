@@ -130,8 +130,14 @@ async function validateAuth0Token(req, res, next) {
       return next();
     }
     
-    if (!decoded || !decoded.header || !decoded.header.kid) {
-      throw new Error('Invalid token structure');
+    if (!decoded || !decoded.header) {
+      console.log('[AUTH] Token decode result:', decoded);
+      throw new Error('Invalid token structure - missing header');
+    }
+    
+    if (!decoded.header.kid) {
+      console.log('[AUTH] Token header:', decoded.header);
+      throw new Error('Invalid token structure - missing kid');
     }
     
     // Get the signing key from Auth0
@@ -511,6 +517,7 @@ app.post('/', validateAuth0Token, (req, res) => {
     
     // Log incoming requests for debugging
     console.log(`[MCP Request] Method: ${method}, ID: ${id}, User: ${req.user?.sub}`);
+    console.log(`[MCP Request] Full body:`, JSON.stringify(req.body, null, 2));
     
     // Handle MCP methods
     handleMCPRequest(req, res);
